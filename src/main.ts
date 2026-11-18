@@ -8,12 +8,22 @@ import { newGame, has, grantFlag, refreshStats, healParty, levelFor, objective, 
 type Mode = 'title' | 'explore' | 'dialogue' | 'battle' | 'pause' | 'ending';
 type Tab = 'journal' | 'party' | 'items' | 'settings' | 'saves' | 'help' | 'shop' | 'map';
 const ui = document.querySelector<HTMLDivElement>('#ui')!;
+const uiFrame = document.querySelector<HTMLDivElement>('#ui-frame')!;
+const game = document.querySelector<HTMLDivElement>('#game')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#world')!;
 const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
+function fitOverlay() {
+  const width = parseFloat(getComputedStyle(uiFrame).width);
+  uiFrame.style.setProperty('--ui-scale', String(game.getBoundingClientRect().width / width));
+}
+fitOverlay();
 let world: World;
 try { world = new World(canvas); } catch (error) {
   ui.innerHTML = '<div class="fatal"><span>✧</span><h1>星燈尚未亮起</h1><p>無法啟動 WebGL。請開啟瀏覽器的硬體加速後重新載入。</p><button onclick="location.reload()">重新載入</button></div>'; throw error;
 }
+function resizeGame() { fitOverlay(); world.resize(); }
+window.addEventListener('resize', resizeGame);
+new ResizeObserver(resizeGame).observe(game);
 const audio = new AudioDirector();
 const storage = { getItem: (key: string) => window.localStorage.getItem(key), setItem: (key: string, value: string) => window.localStorage.setItem(key, value) };
 let state = newGame(); let mode: Mode = 'title'; let previousMode: Mode = 'explore'; let tab: Tab = 'journal'; let battle: Battle | null = null;
@@ -222,8 +232,9 @@ function hud() {
   return `<header class="hud-top"><div class="location"><span class="location-symbol">${icon('pin')}</span><div><span class="eyebrow">${z.chapter}</span><h1>${z.name}<span class="location-dot"></span></h1><span class="location-en">${z.subtitle}</span></div></div><div class="moon-phase">${icon(has(state, 'ending') ? 'sun' : 'moon')}<div><span>${has(state, 'ending') ? '黎明 · 新的約定' : '月蝕前夕'}</span><small>願微光，指引歸途</small></div></div><nav class="hud-nav" aria-label="遊戲選單">${navButton('book', '任務日誌', 'journal', 'J')}${navButton('people', '旅人隊伍', 'party', 'C')}${navButton('bag', '旅途行囊', 'items', 'I')}${navButton('gear', '設定與存檔', 'settings', 'Esc')}</nav></header>
   <div class="world-label" id="world-label"></div><div class="area-announcement" id="area-announcement"><span class="eyebrow">${z.chapter}</span><h2>${z.name}</h2><p>${z.description}</p></div>
   <aside class="quest-widget"><div class="quest-heading"><span class="eyebrow">${icon('star')} ${has(state, 'ending') ? '旅途餘韻' : '當前目標'}</span>${button('地圖','menu:map','map-open')}</div><h3>${has(state, 'ending') ? '星燈重燃之時' : '尋回散落的星火'}</h3><p>${objective(state)}</p><button data-action="menu:journal">開啟旅途日誌 <span>J</span> ${icon('arrow')}</button></aside>
-  <aside class="minimap"><div><span class="eyebrow">${z.name} · 北向</span>${button('展開 M','menu:map','text-button')}</div><div data-map-view>${mapView(state,world)}</div><small>● 你　<span>● 主線</span>　● 星燈</small></aside>
-  <footer class="hud-bottom"><div class="party-strip">${state.party.map(h => `<button class="hero-chip ${h.id === state.leaderId ? 'is-leader' : ''}" data-action="leader:${h.id}" aria-pressed="${h.id === state.leaderId}" aria-label="設${h.name}為帶隊角色">${portrait(h.id)}<div><div class="hero-name">${h.name}<small>${h.id === state.leaderId ? '帶隊 · ' : ''}Lv. ${levelFor(state.xp)}</small></div><div class="bar health"><i style="width:${h.hp / h.maxHp * 100}%"></i></div><div class="hero-numbers"><span>HP <b>${h.hp}</b><em>/ ${h.maxHp}</em></span><span>MP <b>${h.mp}</b></span></div></div></button>`).join('')}</div><div id="interaction" class="interaction"></div><div class="touch-controls" aria-label="觸控操作"><div class="direction-pad">${[['w','↑','向上移動'],['a','←','向左移動'],['s','↓','向下移動'],['d','→','向右移動']].map(([key,symbol,label])=>`<button data-move="${key}" aria-label="${label}">${symbol}</button>`).join('')}</div>${button('互動', 'interact', 'touch-interact')}</div><div class="key-guide"><span><kbd>W A S D</kbd> 移動</span><span><kbd>E</kbd> 互動</span><span><kbd>Esc</kbd> 選單</span></div></footer>`;
+  <div class="hud-tools"><aside class="minimap"><div><span class="eyebrow">${z.name} · 北向</span>${button('展開 M','menu:map','text-button')}</div><div data-map-view>${mapView(state,world)}</div><small>● 你　<span>● 主線</span>　● 星燈</small></aside><div class="key-guide"><span><kbd>W A S D</kbd> 移動</span><span><kbd>E</kbd> 互動</span><span><kbd>Esc</kbd> 選單</span></div></div>
+  <footer class="hud-bottom"><div class="party-strip">${state.party.map(h => `<button class="hero-chip ${h.id === state.leaderId ? 'is-leader' : ''}" data-action="leader:${h.id}" aria-pressed="${h.id === state.leaderId}" aria-label="設${h.name}為帶隊角色">${portrait(h.id)}<div><div class="hero-name">${h.name}<small>${h.id === state.leaderId ? '帶隊 · ' : ''}Lv. ${levelFor(state.xp)}</small></div><div class="bar health"><i style="width:${h.hp / h.maxHp * 100}%"></i></div><div class="hero-numbers"><span>HP <b>${h.hp}</b><em>/ ${h.maxHp}</em></span><span>MP <b>${h.mp}</b></span></div></div></button>`).join('')}</div></footer>
+  <div id="interaction" class="interaction"></div><div class="touch-controls" aria-label="觸控操作"><div class="direction-pad">${[['w','↑','向上移動'],['a','←','向左移動'],['s','↓','向下移動'],['d','→','向右移動']].map(([key,symbol,label])=>`<button data-move="${key}" aria-label="${label}">${symbol}</button>`).join('')}</div>${button('互動', 'interact', 'touch-interact')}</div>`;
 }
 function navButton(name: string, label: string, next: Tab, shortcut: string) { return `<button class="nav-icon" data-action="menu:${next}" aria-label="${label}" title="${label} (${shortcut})">${icon(name)}<small>${shortcut}</small></button>`; }
 function titleScreen() {
@@ -282,7 +293,7 @@ function battlePanel() {
 function endingPanel() { return `<div class="ending-scrim"></div><section class="ending-panel"><span class="ending-star">✧</span><span class="eyebrow">THE LIGHT WE CARRY</span><h1>長夜盡頭，<br>是我們的黎明。</h1><p>你找回了散落的星火，<br>也讓一座山城，重新記起了彼此。</p><div class="ending-stats"><span><b>${state.defeated.length}</b> 次並肩作戰</span><span><b>${['herb-reward', 'pendant-reward'].filter(f => has(state, f)).length}</b> 個完成的約定</span><span><b>${Math.floor(state.playSeconds / 60)}</b> 分鐘的旅程</span></div>${button(`回到星光下 ${icon('arrow')}`, 'ending:explore', 'primary-button')}<small>感謝你，成為這個故事的一部分。<br>通關進度已保存，可繼續探索與完成支線。</small></section>`; }
 function render() {
   ui.innerHTML = mode === 'title' ? titleScreen() : mode === 'battle' ? battlePanel() : `${previousMode === 'title' && mode === 'pause' ? titleScreen() : hud()}${mode === 'dialogue' ? dialoguePanel() : mode === 'pause' ? modalPanel() : mode === 'ending' ? endingPanel() : ''}`;
-  document.querySelector('#game')!.className = `mode-${mode}${state.settings.reducedMotion ? ' reduced-motion' : ''}`;
+  game.className = `mode-${mode}${state.settings.reducedMotion ? ' reduced-motion' : ''}`;
   ui.querySelectorAll<HTMLButtonElement>('button').forEach(b => { if (!b.hasAttribute('aria-label') && !b.textContent?.trim()) b.setAttribute('aria-label', b.dataset.action === 'close' ? '關閉選單' : '開啟設定'); });
   if (mode === 'pause' || mode === 'dialogue' || mode === 'ending') requestAnimationFrame(() => (ui.querySelector('.close-button, .dialogue-next, .ending-panel button') as HTMLElement | null)?.focus({ preventScroll: true }));
 }

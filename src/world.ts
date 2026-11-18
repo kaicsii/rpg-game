@@ -55,11 +55,12 @@ export class World {
   private combatFx: { sprite: THREE.Sprite; start: number; effect: CombatEffect; phase: 'cast' | 'impact'; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
   private noise?: THREE.CanvasTexture; private effects: { sprite: THREE.Sprite; start: number; y: number }[] = [];
   private target = new THREE.Vector3(); private cameraFocus = new THREE.Vector3(); private quality: 'high' | 'low' = 'high'; private reduced = false;
+  private renderWidth = 0; private renderHeight = 0; private deviceRatio = 0;
   private gate?: THREE.Group; private beams: { mesh: THREE.Mesh; id: string; value: number }[] = [];
   private lastTime = 0; private direction = 0; private sun: THREE.DirectionalLight; private moon!: THREE.Mesh;
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.25;
     this.camera = new THREE.OrthographicCamera(-22, 22, 13, -13, 0.1, 250);
     this.scene.background = new THREE.Color('#263e45'); this.scene.fog = new THREE.FogExp2('#354f54', 0.013);
@@ -71,7 +72,7 @@ export class World {
     this.composer = new EffectComposer(this.renderer); this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bokeh = new BokehPass(this.scene, this.camera, { focus: 50, aperture: 0.00006, maxblur: 0.004 }); this.bokeh.enabled = false; this.composer.addPass(this.bokeh);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1280, 720), 0.24, 0.7, 1.2); this.composer.addPass(this.bloom); this.composer.addPass(new OutputPass());
-    this.resize(); new ResizeObserver(() => this.resize()).observe(canvas);
+    this.resize();
   }
   private material(color: THREE.ColorRepresentation, emissive = false) {
     const key = `${color}:${emissive}`; let m = this.materials.get(key);
@@ -277,7 +278,7 @@ export class World {
     if (object) this.highlightRing.position.set(object.x,0.14,object.z);
   }
   configure(quality: 'high' | 'low', reduced: boolean) {
-    if (this.quality !== quality) { this.quality = quality; this.renderer.shadowMap.enabled = quality === 'high'; this.renderer.setPixelRatio(quality === 'high' ? Math.min(devicePixelRatio, 1.5) : 0.85); this.resize(); }
+    if (this.quality !== quality) { this.quality = quality; this.renderer.shadowMap.enabled = quality === 'high'; this.resize(); }
     this.reduced = reduced; if (this.particles) this.particles.visible = !reduced && quality === 'high';
   }
   canWalk(x: number, z: number) { return Math.abs(x) < 14 && Math.abs(z) < 11 && !this.obstacles.some(o => Math.abs(x - o.x) < o.w / 2 + 0.25 && Math.abs(z - o.z) < o.d / 2 + 0.25); }
@@ -331,7 +332,8 @@ export class World {
   project(position: Vec2): { x: number; y: number } { const v = new THREE.Vector3(position.x, 1.4, position.z).project(this.camera); return { x: (v.x + 1) * 50, y: (-v.y + 1) * 50 }; }
   screenDirection(dx: number, dz: number) { const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0); const forward = new THREE.Vector3().subVectors(new THREE.Vector3(), this.camera.position); forward.y = 0; forward.normalize(); return { x: right.x * dx - forward.x * dz, z: right.z * dx - forward.z * dz }; }
   render(state: GameState, moving: boolean, mode: string, dx = 0, dz = 0) {
-    const aspect = this.renderer.domElement.clientWidth / this.renderer.domElement.clientHeight;
+    if (window.devicePixelRatio !== this.deviceRatio) this.resize();
+    const aspect = 16 / 9;
     if (mode !== 'explore' && this.highlightRing) this.highlightRing.visible = false;
     if (this.highlightRing) this.highlightRing.scale.setScalar(this.reduced ? 1 : 1 + Math.sin(this.clock.elapsedTime * 3)*0.06);
     const t = this.clock.getElapsedTime(); this.bokeh.enabled = ['title', 'ending'].includes(mode) && !this.reduced; const dt = Math.min(0.05, t - this.lastTime); this.lastTime = t;
@@ -378,14 +380,26 @@ export class World {
     });
     if (this.particles && !this.reduced) this.particles.rotation.y = Math.sin(t * 0.04) * 0.08;
     this.water.forEach(w => { (w.material as THREE.MeshStandardMaterial).opacity = 0.8 + Math.sin(t * 0.8) * 0.05; });
-    this.target.set(this.battle ? 0 : mode === 'title' ? -3.5 : state.position.x * (aspect < 1 ? 1 : 0.45), 0, this.battle ? 0 : mode === 'title' ? -1 : state.position.z * (aspect < 1 ? 1 : 0.35));
+    this.target.set(this.battle ? 0 : mode === 'title' ? -3.5 : state.position.x * 0.45, 0, this.battle ? 0 : mode === 'title' ? -1 : state.position.z * 0.35);
     this.cameraFocus.lerp(this.target, 1 - Math.exp(-dt * 2.8));
-    const zoom = this.battle ? 0.78 : 1; const h = this.battle ? Math.max(11.8 * zoom, 9 / aspect) : mode === 'title' ? 13.6 : 11.8 * zoom;
-    this.camera.left = -h * aspect; this.camera.right = h * aspect; this.camera.top = h * (this.battle && aspect < 1 ? 0.75 : 1); this.camera.bottom = -h * (this.battle && aspect < 1 ? 1.25 : 1); this.camera.updateProjectionMatrix();
+    const h = this.battle ? 11.8 * 0.78 : mode === 'title' ? 13.6 : 11.8;
+    this.camera.left = -h * aspect; this.camera.right = h * aspect; this.camera.top = h; this.camera.bottom = -h; this.camera.updateProjectionMatrix();
     this.camera.position.copy(this.cameraFocus).add(new THREE.Vector3(24, 28, 34)); this.camera.lookAt(this.cameraFocus); this.camera.updateMatrixWorld();
     if (this.quality === 'high') this.composer.render(); else this.renderer.render(this.scene, this.camera);
   }
-  resize() { const canvas = this.renderer.domElement; const w = canvas.clientWidth; const h = canvas.clientHeight; this.renderer.setSize(w, h, false); this.composer.setSize(w, h); }
+  resize() {
+    const canvas = this.renderer.domElement;
+    const width = canvas.clientWidth; const height = canvas.clientHeight;
+    if (!width || !height) return;
+    const dpr = this.deviceRatio = window.devicePixelRatio;
+    const qualityRatio = this.quality === 'high' ? Math.min(dpr, 2) : Math.min(dpr * 0.75, 1);
+    const ratio = Math.min(qualityRatio, Math.sqrt(3840 * 2160 / (width * height)));
+    if (ratio !== this.renderer.getPixelRatio()) {
+      this.renderer.setPixelRatio(ratio); this.composer.setPixelRatio(ratio);
+    } else if (width === this.renderWidth && height === this.renderHeight) return;
+    this.renderWidth = width; this.renderHeight = height;
+    this.renderer.setSize(width, height, false); this.composer.setSize(width, height);
+  }
   private disposeGroup(g: THREE.Group) { g.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.Points) o.geometry.dispose(); if (o instanceof THREE.Sprite) o.material.dispose();
       if (o instanceof THREE.Mesh && !Array.isArray(o.material) && ![...this.materials.values()].includes(o.material as THREE.MeshStandardMaterial)) o.material.dispose(); if (o instanceof THREE.Points) (o.material as THREE.Material).dispose(); }); g.clear(); }
 }
