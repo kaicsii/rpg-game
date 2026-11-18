@@ -1,0 +1,44 @@
+async page => {
+  const checks = [], errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const check = (ok, label) => { if (!ok) throw new Error(label); checks.push(label); };
+  const moveTo = (x, z) => page.evaluate(({ x, z }) => window.__starlight.moveTo(x, z), { x, z });
+  const marker = id => page.locator(`[data-marker="${id}"]`);
+  await page.setViewportSize({ width: 956, height: 540 });
+  await page.goto('http://localhost:5173');
+  await page.getByRole('button', { name: '啟程 BEGIN YOUR JOURNEY' }).click();
+  await page.keyboard.press('Escape');
+  await marker('child').waitFor({ state: 'visible' });
+  check((await marker('child').innerText()).includes('米菈'), 'Mira is labelled at the village start despite the house');
+  check(await marker('elder').evaluate(el => el.classList.contains('is-main')), 'The main objective has its own marker');
+  check(await page.locator('.minimap [data-map-view] title').allTextContents().then(names => names.includes('米菈') && names.includes('行腳商人') && !names.includes('旅人的補給')), 'Public services appear on the minimap while the undiscovered chest stays hidden');
+  await page.keyboard.press('e');
+  check(await page.evaluate(() => window.__starlight.getMode() === 'explore'), 'A distant marker does not extend interaction range');
+  await page.screenshot({ path: 'output/playwright/landmarks-village.png' });
+  await moveTo(-6, 6.3);
+  await page.getByRole('button', { name: /與米菈交談/ }).click();
+  check((await page.locator('.dialogue-heading').innerText()).includes('米菈'), 'Approaching Mira opens her interaction');
+  await page.keyboard.press('Escape');
+  await moveTo(6, 2.3);
+  await marker('child').waitFor({ state: 'detached' });
+  checks.push('Leaving discovery range removes the world marker');
+  await page.keyboard.press('m');
+  const names = await page.locator('.map-points').innerText();
+  check(names.includes('◆ 米菈') && names.includes('■ 行腳商人') && names.includes('● 星燈'), 'Full map lists town services with distinguishable symbols');
+  await page.keyboard.press('Escape');
+  await moveTo(0, 6);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await marker('child').waitFor({ state: 'visible', timeout: 5000 });
+  checks.push('Mira is still visible from the village start in portrait');
+  check(await page.evaluate(() => {
+    const visible = [...document.querySelectorAll('.world-marker')].filter(el => getComputedStyle(el).visibility === 'visible');
+    const frame = document.querySelector('#game').getBoundingClientRect();
+    const hud = [...document.querySelectorAll('.location, .quest-widget, .hud-nav, .party-strip, .hud-tools, .touch-controls button')].map(el => el.getBoundingClientRect());
+    const boxes = visible.map(el => el.getBoundingClientRect());
+    const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    return boxes.length <= 4 && boxes.every((box, i) => box.left >= frame.left && box.right <= frame.right && box.top >= frame.top && box.bottom <= frame.bottom && !hud.some(rect => intersects(box, rect)) && !boxes.slice(0, i).some(rect => intersects(box, rect)));
+  }), 'Portrait marker budget avoids the HUD and other labels');
+  await page.screenshot({ path: 'output/playwright/landmarks-portrait.png' });
+  check(!errors.length, 'No browser errors');
+  return { checks, errors };
+}

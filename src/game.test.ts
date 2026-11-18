@@ -167,6 +167,22 @@ test('four-unit discovery boundary is persistent, idempotent and hides collected
   assert.ok(visibleMapObjects(s).some(o=>o.id==='herb-1'));s.flags.push('herb-1');assert.ok(!visibleMapObjects(s).some(o=>o.id==='herb-1'));
   s.position={x:9,z:5.01};assert.ok(!s.discoveredObjectIds.includes('herb-2'));discoverNearby(s);assert.ok(!s.discoveredObjectIds.includes('herb-2'));
 });
+
+test('exploration hints do not change interaction range or reveal secret loot early', async () => {
+  const { closestObject, discoverNearby, explorationMarkers, visibleMapObjects } = await import('./game');
+  const state = newGame();
+  assert.equal(closestObject(state), undefined);
+  assert.ok(explorationMarkers(state, closestObject(state)).some(({ object }) => object.id === 'child'));
+  assert.ok(visibleMapObjects(state).some(object => object.id === 'merchant'));
+  state.position = { x: 8, z: 2 };
+  assert.ok(!explorationMarkers(state, closestObject(state)).some(({ object }) => object.id === 'village-chest'));
+  state.position = { x: 8, z: 1 };
+  discoverNearby(state);
+  assert.ok(explorationMarkers(state, closestObject(state)).some(({ object, active }) => object.id === 'village-chest' && !active));
+  state.flags.push('village-chest');
+  assert.ok(!explorationMarkers(state, closestObject(state)).some(({ object }) => object.id === 'village-chest'));
+  assert.ok(!visibleMapObjects(state).some(object => object.id === 'village-chest'));
+});
 test('heavy intents, status durations, spent actions and low-health protection share battle rules',async()=>{
   const {enemyIntent,combatStatuses,shouldStopAutoAttack,isHeavyRound}=await import('./game');const b=startBattle(ready(),fixture('water-elite'));const e=b.enemies[0];
   assert.equal(isHeavyRound(3),true);assert.equal(isHeavyRound(4),false);b.round=3;assert.equal(enemyIntent(b,e),'本回合重擊！');e.broken=true;assert.match(enemyIntent(b,e),/取消/);e.armor=2;assert.equal(combatStatuses(b,e.id).length,2);b.guarding=['loren'];b.cover='loren';assert.equal(combatStatuses(b,'loren').length,2);e.hp=0;assert.equal(enemyIntent(b,e),'');assert.deepEqual(combatStatuses(b,e.id),[]);

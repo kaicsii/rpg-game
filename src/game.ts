@@ -68,7 +68,20 @@ export function discoverNearby(state: GameState): boolean {
 }
 export function visibleMapObjects(state: GameState) {
   const targets = getObjective(state).targetIds;
-  return ZONES[state.zone].objects.filter(o => !(['chest','herb','memory'].includes(o.kind) && has(state,o.id)) && (['exit','back','lamp'].includes(o.kind) || targets.includes(o.id) || state.discoveredObjectIds.includes(o.id)));
+  return availableObjects(state).filter(o => ['exit','back','lamp','npc'].includes(o.kind) || targets.includes(o.id) || state.discoveredObjectIds.includes(o.id));
+}
+function availableObjects(state: GameState) {
+  return ZONES[state.zone].objects.filter(o => !(['chest','herb','memory'].includes(o.kind) && has(state,o.id)));
+}
+function objectsByDistance(state: GameState) {
+  return availableObjects(state).map(object => ({ object, distance: Math.hypot(object.x - state.position.x, object.z - state.position.z) })).sort((a, b) => a.distance - b.distance);
+}
+export function explorationMarkers(state: GameState, nearest: ReturnType<typeof closestObject>) {
+  const mainTargets = getObjective(state).targetIds;
+  return objectsByDistance(state)
+    .map(({ object, distance }) => ({ object, distance, active: object.id === nearest?.id, main: mainTargets.includes(object.id) }))
+    .filter(({ object, distance, active, main }) => active || main || (distance <= 8 && (['npc', 'lamp'].includes(object.kind) || state.discoveredObjectIds.includes(object.id))))
+    .sort((a, b) => Number(b.active) - Number(a.active) || Number(b.main) - Number(a.main));
 }
 export const isHeavyRound = (round: number) => round % 3 === 0;
 export const shouldStopAutoAttack = (heroes: Hero[], enabled: boolean) => enabled && heroes.some(h => h.hp * 10 <= h.maxHp * 3);
@@ -268,4 +281,6 @@ export function loadGame(storage: StorageLike, slot: 'auto' | 'manual'): { state
   try { const raw = storage.getItem(`starlight:${slot}`); if (!raw) return { error: '此欄位尚無存檔。' }; const value: unknown = migrateSave(JSON.parse(raw)); return validSave(value) ? { state: value } : { error: '存檔格式無效或版本不相容。可嘗試另一個存檔。' }; }
   catch { return { error: '無法讀取存檔。可嘗試另一個存檔，或開始新旅程。' }; }
 }
-export function closestObject(state: GameState) { return ZONES[state.zone].objects.filter(o => !(['chest','herb','memory'].includes(o.kind) && has(state,o.id))).map(o => ({ object: o, distance: Math.hypot(o.x - state.position.x, o.z - state.position.z) })).filter(o => o.distance < 2.2).sort((a, b) => a.distance - b.distance)[0]?.object; }
+export function closestObject(state: GameState, targetId?: string) {
+  return objectsByDistance(state).find(({ object, distance }) => distance < 2.2 && (!targetId || object.id === targetId))?.object;
+}

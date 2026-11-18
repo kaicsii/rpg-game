@@ -1,28 +1,23 @@
 import './style.css';
-import { mapView, mapPoints } from './map';
+import { mapView, mapPoints, mapSymbol } from './map';
 import { World, pixelTexture } from './world';
 import { AudioDirector } from './audio';
 import { ZONES, ZONE_ORDER, SKILLS, ITEMS, ENEMIES, ELEMENT_NAMES, LORE, OPENING, LOREN_MEMORY, ENDING, BRIDGE_CLUES, GUARDIAN_INTRO, type GameState, type HeroId, type ItemId, type Interactable, type Encounter, type ZoneId } from './data';
-import { newGame, has, grantFlag, bridgeClueFlag, completeBridgeQuest, refreshStats, healParty, levelFor, objective, getObjective, discoverNearby, shouldStopAutoAttack, enemyIntent, enemyThreat, revealedWeaknesses, combatStatuses, canLeave, puzzleSolved, travel, closestObject, applyItem, saveGame, loadGame, startBattle, currentActor, resolveAction, advanceEnemies, finishBattle, type Battle, type Action, type BattleEvent } from './game';
+import { newGame, has, grantFlag, bridgeClueFlag, completeBridgeQuest, refreshStats, healParty, levelFor, objective, getObjective, discoverNearby, shouldStopAutoAttack, enemyIntent, enemyThreat, revealedWeaknesses, combatStatuses, canLeave, puzzleSolved, travel, closestObject, explorationMarkers, applyItem, saveGame, loadGame, startBattle, currentActor, resolveAction, advanceEnemies, finishBattle, type Battle, type Action, type BattleEvent } from './game';
 
 type Mode = 'title' | 'explore' | 'dialogue' | 'battle' | 'pause' | 'ending';
 type Tab = 'journal' | 'party' | 'items' | 'settings' | 'saves' | 'help' | 'shop' | 'map';
 const ui = document.querySelector<HTMLDivElement>('#ui')!;
-const uiFrame = document.querySelector<HTMLDivElement>('#ui-frame')!;
 const game = document.querySelector<HTMLDivElement>('#game')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#world')!;
 const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
-function fitOverlay() {
-  const width = parseFloat(getComputedStyle(uiFrame).width);
-  uiFrame.style.setProperty('--ui-scale', String(game.getBoundingClientRect().width / width));
-}
-fitOverlay();
 let world: World;
 try { world = new World(canvas); } catch (error) {
   ui.innerHTML = '<div class="fatal"><span>✧</span><h1>星燈尚未亮起</h1><p>無法啟動 WebGL。請開啟瀏覽器的硬體加速後重新載入。</p><button onclick="location.reload()">重新載入</button></div>'; throw error;
 }
-function resizeGame() { fitOverlay(); world.resize(); }
+function resizeGame() { world.resize(); }
 window.addEventListener('resize', resizeGame);
+window.addEventListener('orientationchange', resizeGame);
 new ResizeObserver(resizeGame).observe(game);
 const audio = new AudioDirector();
 const storage = { getItem: (key: string) => window.localStorage.getItem(key), setItem: (key: string, value: string) => window.localStorage.setItem(key, value) };
@@ -39,6 +34,7 @@ const icon = (name: string, cls = '') => {
     star: '<path d="m12 2 2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5Z"/>',
     moon: '<path d="M20.5 14.2A9 9 0 0 1 9.8 3.5a9 9 0 1 0 10.7 10.7Z"/>',
     book: '<path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1Zm0 0v15"/>',
+    chat: '<path d="M4 4h16v12H10l-5 4v-4H4zM8 10h.1M12 10h.1M16 10h.1"/>',
     bag: '<path d="M8 7V5a4 4 0 0 1 8 0v2M5 7h14l2 14H3Z"/><path d="M9 12h6m-3-3v6"/>',
     people: '<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6m1 4a6 6 0 0 1 4 7"/>',
     gear: '<path d="m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h6l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/>',
@@ -65,7 +61,7 @@ function autoSave() { store('auto', true); }
 function settingsSync() { audio.setVolume(state.settings.volume); world.sync(state); }
 function setMode(next: Mode) {
   if (next !== 'battle') autoAttack = false;
-  mode = next; keys.clear(); nearby = '';
+  mode = next; keys.clear();
   const inForest = state.zone === 'forest' && next !== 'title' && !(next === 'pause' && previousMode === 'title');
   audio.setScore(dialogue?.atBridge || battle?.encounter.id === 'forest-elite' ? 'guardian' : inForest ? 'forest' : 'journey', next === 'battle');
   render();
@@ -269,9 +265,9 @@ const playTime = () => `${Math.floor(state.playSeconds / 3600).toString().padSta
 function hud() {
   const z = ZONES[state.zone];
   return `<header class="hud-top"><div class="location"><span class="location-symbol">${icon('pin')}</span><div><span class="eyebrow">${z.chapter}</span><h1>${z.name}<span class="location-dot"></span></h1><span class="location-en">${z.subtitle}</span></div></div><div class="moon-phase">${icon(has(state, 'ending') ? 'sun' : 'moon')}<div><span>${has(state, 'ending') ? '黎明 · 新的約定' : '月蝕前夕'}</span><small>願微光，指引歸途</small></div></div><nav class="hud-nav" aria-label="遊戲選單">${navButton('book', '任務日誌', 'journal', 'J')}${navButton('people', '旅人隊伍', 'party', 'C')}${navButton('bag', '旅途行囊', 'items', 'I')}${navButton('gear', '設定與存檔', 'settings', 'Esc')}</nav></header>
-  <div class="world-label" id="world-label"></div><div class="area-announcement" id="area-announcement"><span class="eyebrow">${z.chapter}</span><h2>${z.name}</h2><p>${z.description}</p></div>
+  <div id="world-markers" aria-hidden="true"></div><div class="area-announcement" id="area-announcement"><span class="eyebrow">${z.chapter}</span><h2>${z.name}</h2><p>${z.description}</p></div>
   <aside class="quest-widget"><div class="quest-heading"><span class="eyebrow">${icon('star')} ${has(state, 'ending') ? '旅途餘韻' : '當前目標'}</span>${button('地圖','menu:map','map-open')}</div><h3>${has(state, 'ending') ? '星燈重燃之時' : '尋回散落的星火'}</h3><p>${objective(state)}</p><button data-action="menu:journal">開啟旅途日誌 <span>J</span> ${icon('arrow')}</button></aside>
-  <div class="hud-tools"><aside class="minimap"><div><span class="eyebrow">${z.name} · 北向</span>${button('展開 M','menu:map','text-button')}</div><div data-map-view>${mapView(state,world)}</div><small>● 你　<span>● 主線</span>　● 星燈</small></aside><div class="key-guide"><span><kbd>W A S D</kbd> 移動</span><span><kbd>E</kbd> 互動</span><span><kbd>Esc</kbd> 選單</span></div></div>
+  <div class="hud-tools"><aside class="minimap"><div><span class="eyebrow">${z.name} · 北向</span>${button('展開 M','menu:map','text-button')}</div><div data-map-view>${mapView(state,world)}</div><small>● 你　<span>★ 主線</span>　<span class="map-npc">◆ 村民</span><br><span class="map-shop">■ 商店</span>　<span class="map-lamp">● 星燈</span></small></aside><div class="key-guide"><span><kbd>W A S D</kbd> 移動</span><span><kbd>E</kbd> 互動</span><span><kbd>Esc</kbd> 選單</span></div></div>
   <footer class="hud-bottom"><div class="party-strip">${state.party.map(h => `<button class="hero-chip ${h.id === state.leaderId ? 'is-leader' : ''}" data-action="leader:${h.id}" aria-pressed="${h.id === state.leaderId}" aria-label="設${h.name}為帶隊角色">${portrait(h.id)}<div><div class="hero-name">${h.name}<small>${h.id === state.leaderId ? '帶隊 · ' : ''}Lv. ${levelFor(state.xp)}</small></div><div class="bar health"><i style="width:${h.hp / h.maxHp * 100}%"></i></div><div class="hero-numbers"><span>HP <b>${h.hp}</b><em>/ ${h.maxHp}</em></span><span>MP <b>${h.mp}</b></span></div></div></button>`).join('')}</div></footer>
   <div id="interaction" class="interaction"></div><div class="touch-controls" aria-label="觸控操作"><div class="direction-pad">${[['w','↑','向上移動'],['a','←','向左移動'],['s','↓','向下移動'],['d','→','向右移動']].map(([key,symbol,label])=>`<button data-move="${key}" aria-label="${label}">${symbol}</button>`).join('')}</div>${button('互動', 'interact', 'touch-interact')}</div>`;
 }
@@ -296,7 +292,7 @@ function modalPanel() {
   return `<div class="modal-scrim"></div><section class="menu-panel" role="dialog" aria-modal="true" aria-label="${title}"><aside class="menu-sidebar"><div class="menu-brand">${icon('star')}<span>星燈紀行<small>TRAVELER'S COMPANION</small></span></div>${tabs.map(([key, label, symbol]) => button(`${icon(symbol)} ${label}`, `tab:${key}`, tab === key ? 'tab active' : 'tab', previousMode === 'title' && ['map', 'journal', 'party', 'items'].includes(key))).join('')}<div class="sidebar-bottom">${icon('moon')}<span>願微光，指引歸途</span></div></aside><div class="menu-main"><header class="menu-heading"><div><span class="eyebrow">THE JOURNEY WITHIN</span><h2>${title}</h2></div>${button(icon('close'), 'close', 'close-button')}</header><div class="menu-scroll">${menuContent()}</div><footer class="menu-footer"><span>${icon('star')} ${state.gold} 星幣</span><span>旅途時間 ${playTime()}</span><span><kbd>Esc</kbd> 返回</span></footer></div></section>`;
 }
 function menuContent(): string {
-  if (tab === 'map') return `<p class="menu-intro">${objective(state)}</p><div data-map-view class="large-map">${mapView(state,world)}</div><div class="map-legend">● 白色：玩家　<span>● 金色：主線目標</span>　● 青色：星燈<br>北方朝上；道路與障礙完整顯示。收藏物接近四個單位後揭露。</div><ul class="map-points">${mapPoints(state).map(o=>`<li>${getObjective(state).targetIds.includes(o.id)?'★':'◇'} ${esc(o.label)}${has(state,o.id)?'（已讀）':''}</li>`).join('')}</ul>`;
+  if (tab === 'map') return `<p class="menu-intro">${objective(state)}</p><div data-map-view class="large-map">${mapView(state,world)}</div><div class="map-legend">● 玩家　<span>★ 主線</span>　<span class="map-npc">◆ 村民</span>　<span class="map-shop">■ 商店</span>　<span class="map-lamp">● 星燈</span><br>北方朝上；道路與障礙完整顯示。收藏物接近四個單位後揭露。</div><ul class="map-points">${mapPoints(state).map(o=>`<li>${mapSymbol(o.kind, o.id, getObjective(state).targetIds.includes(o.id))} ${esc(o.label)}${has(state,o.id)?'（已讀）':''}</li>`).join('')}</ul>`;
 
   if (tab === 'journal') {
     return `<div class="chapter-card"><span class="eyebrow">主線 · ${progress()}% COMPLETE</span><h3>尋回散落的星火</h3><p>${objective(state)}</p><div class="progress-track"><i style="width:${progress()}%"></i></div></div><h3 class="section-label">旅途的足跡</h3><div class="chapter-list">${ZONE_ORDER.map((id, i) => `<div class="chapter-row ${id === state.zone ? 'current' : ''}"><span class="chapter-number">0${i + 1}</span><div><h4>${ZONES[id].name}</h4><p>${i === 0 ? '與婆婆交談，從北方小徑出發。' : i === 1 ? '點亮三盞路燈，挑戰守橋樹靈。' : i === 2 ? '開啟兩道水閘，拾回西北方的記憶。' : '調整星盤：西二、東一、北三。'}</p></div><span>${id === state.zone ? '旅途之中' : ZONE_ORDER.indexOf(state.zone) > i || has(state, 'ending') ? '已抵達' : '等待探訪'}</span></div>`).join('')}</div><h3 class="section-label">拾回的記憶 · ${Object.keys(LORE).filter(id => has(state, id)).length} / 8</h3><div class="lore-notes">${Object.entries(LORE).filter(([id]) => has(state, id)).map(([, note]) => `<details><summary>${note.title}</summary>${note.lines.map(([speaker, text]) => `<p><b>${speaker}</b>${text}</p>`).join('')}</details>`).join('') || '<p class="footnote">沿途的碑文、信紙與舊物，藏著山城曾經的故事。</p>'}</div><h3 class="section-label">沿途的約定</h3>${bridgeJournal()}<div class="sidequest"><h4>${has(state, 'herb-reward') ? '✓' : '◇'} 一捧月露</h4><p>在森林採集三株月露草，帶回霧鐘村給守燈婆婆。${[1, 2, 3].filter(n => has(state, `herb-${n}`)).length} / 3</p><small>獎勵：月露護符（生命 +25）、月露藥 ×3</small></div><div class="sidequest"><h4>${has(state, 'pendant-reward') ? '✓' : '◇'} 水底的風鈴</h4><p>在沉星水道東南方尋找銀色墜飾，交給村裡的米菈。</p><small>獎勵：記憶石（魔力 +10）、星泉水 ×3、甦醒之羽 ×1</small></div>`;
@@ -342,6 +338,7 @@ function endingPanel() { return `<div class="ending-scrim"></div><section class=
 function render() {
   ui.innerHTML = mode === 'title' ? titleScreen() : mode === 'battle' ? battlePanel() : `${dialogue?.atBridge ? bridgeIntro() : previousMode === 'title' && mode === 'pause' ? titleScreen() : hud()}${mode === 'dialogue' ? dialoguePanel() : mode === 'pause' ? modalPanel() : mode === 'ending' ? endingPanel() : ''}`;
   game.className = `mode-${mode}${state.settings.reducedMotion ? ' reduced-motion' : ''}`;
+  nearby = '';
   ui.querySelectorAll<HTMLButtonElement>('button').forEach(b => { if (!b.hasAttribute('aria-label') && !b.textContent?.trim()) b.setAttribute('aria-label', b.dataset.action === 'close' ? '關閉選單' : '開啟設定'); });
   if (mode === 'pause' || mode === 'dialogue' || mode === 'ending') requestAnimationFrame(() => (ui.querySelector('.close-button, .dialogue-next, .ending-panel button') as HTMLElement | null)?.focus({ preventScroll: true }));
 }
@@ -377,6 +374,22 @@ ui.addEventListener('click', event => {
     else { battleMenu = a === 'back' ? 'main' : a as 'skills' | 'items'; render(); }
   }
   else if (action === 'ending') { setMode('explore'); showArea(); }
+});
+canvas.addEventListener('click', event => {
+  if (mode !== 'explore') return;
+  const hit = world.pick(event.clientX, event.clientY);
+  if (hit?.building) { toast(hit.building); return; }
+  if (hit?.id === 'lien' || hit?.id === 'loren') {
+    if (hit.id !== state.leaderId) setLeader(hit.id);
+    return;
+  }
+  if (!hit?.id) return;
+  const target = closestObject(state, hit.id);
+  if (target) interact(target);
+  else {
+    const object = ZONES[state.zone].objects.find(object => object.id === hit.id);
+    if (object) toast(`走近「${object.label}」即可互動。`);
+  }
 });
 ui.addEventListener('input', event => { const t = event.target as HTMLInputElement; if (t.id === 'volume') { state.settings.volume = Number(t.value) / 100; audio.setVolume(state.settings.volume); t.nextElementSibling!.textContent = `${t.value}%`; if (previousMode !== 'title') autoSave(); } });
 window.addEventListener('keydown', e => {
@@ -415,14 +428,61 @@ ui.addEventListener('keydown', e => {
 function updatePrompt() {
   const obj = closestObject(state); const next = obj?.id ?? ''; world.highlight(obj?.id);
   if (next !== nearby) {
-    nearby = next; const prompt = document.querySelector('#interaction'); const label = document.querySelector<HTMLElement>('#world-label');
-    if (prompt) prompt.innerHTML = obj ? button(`<kbd>E</kbd> ${obj.id === 'bridge-lantern' ? BRIDGE_CLUES[state.leaderId].action : obj.label} ${icon('arrow')}`, 'interact', 'interact-button') : '';
-    if (label) label.innerHTML = obj ? `<span>◇</span> ${obj.label}` : '';
+    nearby = next; const prompt = document.querySelector('#interaction');
+    if (prompt) prompt.innerHTML = obj ? button(`<kbd>E</kbd> ${obj.id === 'bridge-lantern' ? BRIDGE_CLUES[state.leaderId].action : obj.kind === 'npc' && obj.id !== 'merchant' ? `與${esc(obj.label)}交談` : esc(obj.label)} ${icon('arrow')}`, 'interact', 'interact-button') : '';
   }
-  const label = document.querySelector<HTMLElement>('#world-label'); if (label && obj) { const p = world.project(obj); label.style.left = `${p.x}%`; label.style.top = `${p.y - 5}%`; }
+  return obj;
+}
+function updateMarkers(nearest: Interactable | undefined) {
+  const layer = ui.querySelector<HTMLElement>('#world-markers');
+  if (!layer) return;
+  const candidates = explorationMarkers(state, nearest);
+  const signature = candidates.map(({ object, active, main }) => `${object.id}:${Number(active)}:${Number(main)}`).join(',');
+  if (layer.dataset.markers !== signature) {
+    layer.dataset.markers = signature;
+    layer.innerHTML = candidates.map(({ object, active, main }) => {
+      const symbol = main ? 'star' : object.id === 'merchant' ? 'bag' : object.kind === 'npc' ? 'chat' : object.kind === 'lamp' ? 'sun' : 'pin';
+      return `<div class="world-marker${main ? ' is-main' : ''}${active ? ' is-active' : ''}" data-marker="${object.id}">${icon(symbol)}<span>${esc(object.label)}</span></div>`;
+    }).join('');
+  }
+  const frame = layer.getBoundingClientRect();
+  if (!frame.width || !frame.height) return;
+  const view = canvas.getBoundingClientRect();
+  const compact = frame.width < 650;
+  const occupied: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>[] = Array.from(ui.querySelectorAll('.location, .moon-phase, .hud-nav, .quest-widget, .party-strip, .hud-tools, .touch-controls button, .interaction button'))
+    .map(element => element.getBoundingClientRect()).filter(rect => rect.width && rect.height);
+  let shown = 0;
+  const placements = Array.from(layer.children, (node, index) => {
+    const element = node as HTMLElement;
+    const { object } = candidates[index];
+    const point = world.project(object, object.kind === 'lamp' ? 2.75 : object.kind === 'npc' ? 1.85 : 1.4);
+    const x = view.left + view.width * point.x / 100;
+    const y = view.top + view.height * point.y / 100;
+    const { width, height } = element.getBoundingClientRect();
+    const anchorY = y + 6;
+    const side = width * .65;
+    for (const [offset, lift] of [[0, 0], [side, 0], [-side, 0], [side, height + 16], [-side, height + 16]]) {
+      const box = { left: x + offset - width / 2, right: x + offset + width / 2, top: y - height - lift, bottom: y - lift };
+      if (shown >= (compact ? 4 : 6) || box.left < frame.left + 4 || box.right > frame.right - 4 || box.top < frame.top + 4 || anchorY > frame.bottom - 4
+        || occupied.some(rect => box.left < rect.right + 4 && box.right > rect.left - 4 && box.top < rect.bottom + 4 && box.bottom + 4 > rect.top)) continue;
+      occupied.push(box); shown++;
+      return { element, left: x + offset - frame.left, top: y - lift - frame.top, offset, lift };
+    }
+    return { element };
+  });
+  for (const { element, left, top, offset, lift } of placements) {
+    element.style.visibility = offset === undefined ? 'hidden' : 'visible';
+    if (offset !== undefined && lift !== undefined) {
+      element.style.left = `${left}px`;
+      element.style.top = `${top}px`;
+      element.style.setProperty('--stem-angle', `${Math.atan2(offset, lift + 6)}rad`);
+      element.style.setProperty('--stem-length', `${Math.hypot(offset, lift + 6)}px`);
+    }
+  }
 }
 function frame(now: number) {
   requestAnimationFrame(frame); const dt = Math.min((now - lastTick) / 1000, 0.05); lastTick = now; let moving = false; let mx = 0; let mz = 0;
+  let nearest: Interactable | undefined;
   if (!document.hidden && mode !== 'title' && !(mode === 'pause' && previousMode === 'title')) {
     timeAccumulator += dt; if (timeAccumulator >= 1) { state.playSeconds++; timeAccumulator -= 1; const el = document.querySelector('#play-time'); if (el) el.textContent = playTime(); }
   }
@@ -442,16 +502,24 @@ function frame(now: number) {
       if (discoverNearby(state)) { autoSave(); document.querySelectorAll('[data-map-view]').forEach(el=>{el.innerHTML=mapView(state,world);}); }
       else document.querySelectorAll('[data-map-player]').forEach(el=>{el.setAttribute('cx',String(state.position.x));el.setAttribute('cy',String(state.position.z));});
     }
-    updatePrompt();
+    nearest = updatePrompt();
     if (encounterCooldown <= 0) { const encounter = ZONES[state.zone].encounters.find(e => !state.defeated.includes(e.id) && Math.hypot(e.x - state.position.x, e.z - state.position.z) < (e.required ? 1.55 : 0.95)); if (encounter) beginBattle(encounter); }
   }
   world.render(state, moving, mode, mx, mz, dialogue?.atBridge);
+  if (mode === 'explore' && !document.hidden) updateMarkers(nearest);
 }
 world.build(state); render(); requestAnimationFrame(frame);
 // Development-only fixture access for reproducible browser QA; omitted from production builds.
 if (import.meta.env.DEV) {
   Object.assign(window, { __starlight: {
     canWalk: (x: number, z: number) => world.canWalk(x, z),
+    view: () => ({ left: world.camera.left, right: world.camera.right, top: world.camera.top, bottom: world.camera.bottom }),
+    screenPoint: (x: number, z: number, height: number) => {
+      const projected = world.project({ x, z }, height);
+      const rect = canvas.getBoundingClientRect();
+      return { x: rect.left + projected.x * rect.width / 100, y: rect.top + projected.y * rect.height / 100 };
+    },
+    pick: (x: number, y: number) => world.pick(x, y),
     getState: () => structuredClone(state), getMode: () => mode, getBattle: () => structuredClone(battle),
     fixture: (zone: ZoneId, options: { ready?: boolean; strong?: boolean } = {}) => {
       state = newGame(); state.zone = zone; state.flags = ['intro', 'main-quest']; state.defeated = ZONE_ORDER.slice(1,ZONE_ORDER.indexOf(zone)).map(z=>z === 'forest' ? 'forest-elite' : 'water-elite');

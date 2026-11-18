@@ -67,7 +67,11 @@ export class World {
   private combatFx: { sprite: THREE.Sprite; start: number; effect: CombatEffect; phase: 'cast' | 'impact'; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
   private noise?: THREE.CanvasTexture; private effects: { sprite: THREE.Sprite; start: number; y: number }[] = [];
   private target = new THREE.Vector3(); private cameraFocus = new THREE.Vector3(); private quality: 'high' | 'low' = 'high'; private reduced = false;
-  private renderWidth = 0; private renderHeight = 0; private deviceRatio = 0;
+  private viewport = new THREE.Vector2();
+  private deviceRatio = 0;
+  private resizeTimer?: ReturnType<typeof setTimeout>;
+  private readonly picker = new THREE.Raycaster();
+  private readonly ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private gate?: THREE.Group; private beams: { mesh: THREE.Mesh; id: string; value: number }[] = [];
   private lastTime = 0; private direction = 0; private sun: THREE.DirectionalLight; private moon!: THREE.Mesh;
   constructor(canvas: HTMLCanvasElement) {
@@ -84,7 +88,7 @@ export class World {
     this.composer = new EffectComposer(this.renderer); this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bokeh = new BokehPass(this.scene, this.camera, { focus: 50, aperture: 0.00006, maxblur: 0.004 }); this.bokeh.enabled = false; this.composer.addPass(this.bokeh);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1280, 720), 0.24, 0.7, 1.2); this.composer.addPass(this.bloom); this.composer.addPass(new OutputPass());
-    this.resize();
+    this.resize(true);
   }
   private material(color: THREE.ColorRepresentation, emissive = false) {
     const key = `${color}:${emissive}`; let m = this.materials.get(key);
@@ -127,6 +131,7 @@ export class World {
   }
   private house(x: number, z: number, w: number, d: number, color: number, roofColor: number, tall = false) {
     const h = tall ? 4 : 2.8; const g = new THREE.Group(); g.position.set(x, 0, z); this.root.add(g);
+    g.userData.building = '霧鐘村民宅';
     this.box(0, 0.22, 0, w + 0.4, 0.4, d + 0.4, 0x69756d, g); this.box(0, h / 2 + 0.3, 0, w, h, d, color, g);
     for (const dx of [-w / 2 + 0.12, w / 2 - 0.12]) { this.box(dx, h / 2 + 0.35, d / 2 + 0.04, 0.17, h, 0.16, 0x655c4c, g); this.box(dx, h / 2 + 0.35, -d / 2, 0.17, h, 0.16, 0x655c4c, g); }
     this.box(0, h - 0.2, d / 2 + 0.04, w, 0.16, 0.12, 0x655c4c, g);
@@ -159,12 +164,16 @@ export class World {
     for (let k = 0; k < 20; k++) this.box(x + Math.sin(k * 17) * w * 0.4, 0.005, z - d / 2 + k * d / 20, 0.3 + (k % 4) * 0.15, 0.012, 0.035, 0x9bc6bf);
   }
   private tower(x: number, z: number, height = 9) {
+    const start = this.root.children.length;
     this.cylinder(x, 0.25, z, 2.5, 0.5, 0x83918a); this.box(x, height / 2, z, 3.1, height, 3.1, 0x969c87);
     for (let i = 1; i < height; i += 1.5) this.box(x, i, z, 3.25, 0.16, 3.25, 0x6b7e74);
     this.box(x, height - 1.5, z + 1.57, 1, 1.4, 0.05, 0x344f51); this.box(x, height - 1.5, z + 1.61, 0.7, 1.1, 0.03, 0xffdc8c, this.root, true);
     const roof = new THREE.Mesh(new THREE.ConeGeometry(3.1, 3.6, 4), this.material(0x4b7071)); roof.rotation.y = Math.PI / 4; roof.position.set(x, height + 1.5, z); roof.castShadow = true; this.root.add(roof);
     this.cylinder(x, height + 3.6, z, 0.07, 1.3, palette.gold); const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.3), this.material(0xffd795, true)); star.position.set(x, height + 4.3, z); this.root.add(star);
     this.obstacles.push({ x, z, w: 3.8, d: 3.8 });
+    for (const part of this.root.children.slice(start)) {
+      part.userData.building = '鐘塔';
+    }
   }
   build(state: GameState) {
     this.disposeGroup(this.root); this.disposeGroup(this.actorRoot); this.sprites.clear(); this.effects.forEach(e => { e.sprite.material.map?.dispose(); e.sprite.material.dispose(); }); this.effects = []; this.combatFx = []; this.obstacles = []; this.mapRoads = [{x:0,z:0,w:2.8,d:22},{x:0,z:1.8,w:22,d:2.8}]; this.mapWater = []; this.water = []; this.lamps.clear(); this.zone = state.zone; this.battle = false; this.beams = []; this.gate = undefined;
@@ -239,6 +248,7 @@ export class World {
     }
     this.addGrass(rng, zone);
     for (const o of ZONES[zone].objects) {
+      const start = this.root.children.length;
       if (o.kind === 'lore') { this.box(o.x, 0.45, o.z, 0.72, 0.9, 0.32, 0x939b87); this.box(o.x, 0.96, o.z, 0.82, 0.12, 0.42, 0xbbbd9e); for (let line = 0; line < 3; line++) this.box(o.x, 0.7 - line * 0.14, o.z + 0.17, 0.4 - line * 0.08, 0.025, 0.015, 0xd9ca98, this.root, true); }
       if (o.kind === 'lamp') this.lamp(o.x, o.z, o.id, true);
       if (o.kind === 'mechanism') {
@@ -248,6 +258,9 @@ export class World {
       if (o.kind === 'chest') { const g = new THREE.Group(); g.position.set(o.x, 0, o.z); this.root.add(g); this.box(0, 0.35, 0, 0.85, 0.6, 0.65, 0x876344, g); this.box(0, 0.7, 0, 0.9, 0.18, 0.7, 0xb58f59, g); this.box(0, 0.5, 0.36, 0.15, 0.2, 0.03, 0xe2c182, g); this.lamps.set(o.id, g); }
       if (o.kind === 'herb' || o.kind === 'memory') { const gem = new THREE.Mesh(new THREE.OctahedronGeometry(o.kind === 'herb' ? 0.18 : 0.3), this.material(o.kind === 'herb' ? 0xa8e0b1 : 0xb6e5ef, true)); gem.position.set(o.x, 0.5, o.z); this.root.add(gem); const g = new THREE.Group(); this.root.add(g); g.add(gem); this.lamps.set(o.id, g); }
       if (o.kind === 'exit' || o.kind === 'back') { const ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.8, 32), new THREE.MeshBasicMaterial({ color: 0xf1d89c, transparent: true, opacity: 0.65, side: THREE.DoubleSide })); ring.rotation.x = -Math.PI / 2; ring.position.set(o.x, 0.12, o.z); this.root.add(ring); }
+      const targets = this.root.children.slice(start);
+      if (o.kind === 'clue' && this.lamps.has(o.id)) targets.push(this.lamps.get(o.id)!);
+      for (const target of targets) target.userData.interactable = o.id;
     }
     this.player = this.sprite(state.leaderId, state.position.x, state.position.z, state.leaderId); this.companion = this.sprite(state.leaderId === 'lien' ? 'loren' : 'lien', state.position.x + 0.9, state.position.z + 0.8, state.leaderId === 'lien' ? 'loren' : 'lien');
     for (const e of ZONES[zone].encounters) if (!state.defeated.includes(e.id)) this.sprite(e.enemies[0], e.x, e.z, e.id, e.required ? 1.5 : 1.05);
@@ -303,7 +316,7 @@ export class World {
     if (object) this.highlightRing.position.set(object.x,0.14,object.z);
   }
   configure(quality: 'high' | 'low', reduced: boolean) {
-    if (this.quality !== quality) { this.quality = quality; this.renderer.shadowMap.enabled = quality === 'high'; this.resize(); }
+    if (this.quality !== quality) { this.quality = quality; this.renderer.shadowMap.enabled = quality === 'high'; }
     this.reduced = reduced; if (this.particles) this.particles.visible = !reduced && quality === 'high';
   }
   canWalk(x: number, z: number) { return Math.abs(x) < 14 && Math.abs(z) < 11 && !this.obstacles.some(o => Math.abs(x - o.x) < o.w / 2 + 0.25 && Math.abs(z - o.z) < o.d / 2 + 0.25); }
@@ -363,11 +376,49 @@ export class World {
     const center = victim.position.clone().add(new THREE.Vector3(0,0.25,0)); this.spawnCombatEffect(center, center, effect, 'impact');
     if (effect !== 'heal' && !this.reduced) { victim.userData.flashUntil = this.clock.elapsedTime + 0.18; victim.userData.hit = { start: this.clock.elapsedTime, origin: victim.position.clone() }; }
   }
-  project(position: Vec2): { x: number; y: number } { const v = new THREE.Vector3(position.x, 1.4, position.z).project(this.camera); return { x: (v.x + 1) * 50, y: (-v.y + 1) * 50 }; }
+  project(position: Vec2, height = 1.4): { x: number; y: number } { const v = new THREE.Vector3(position.x, height, position.z).project(this.camera); return { x: (v.x + 1) * 50, y: (-v.y + 1) * 50 }; }
+  pick(clientX: number, clientY: number): { position: Vec2; id?: string; building?: string } | undefined {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height || clientX < rect.left || clientX >= rect.right || clientY < rect.top || clientY >= rect.bottom) return;
+    this.picker.setFromCamera(new THREE.Vector2(
+      2 * (clientX - rect.left) / rect.width - 1,
+      1 - 2 * (clientY - rect.top) / rect.height,
+    ), this.camera);
+    const scenery = this.root.children.filter(object =>
+      object !== this.highlightRing && !(object instanceof THREE.InstancedMesh) && !(object instanceof THREE.Points),
+    );
+    const ground = this.picker.ray.intersectPlane(this.ground, new THREE.Vector3());
+    const groundDistance = ground ? this.picker.ray.origin.distanceTo(ground) : Infinity;
+    for (const hit of this.picker.intersectObjects([...scenery, ...this.sprites.values()])) {
+      if (hit.distance > groundDistance + 1e-6) break;
+      let object: THREE.Object3D | null = hit.object;
+      let visible = true;
+      let id: string | undefined;
+      let building: string | undefined;
+      while (object) {
+        visible &&= object.visible;
+        id ??= object.userData.interactable;
+        building ??= object.userData.building;
+        object = object.parent;
+      }
+      if (!visible) continue;
+      if (hit.object instanceof THREE.Sprite && hit.uv) {
+        const texture = hit.object.material.map!;
+        const pixels = texture.image as HTMLCanvasElement;
+        const x = THREE.MathUtils.clamp(Math.floor(hit.uv.x * pixels.width), 0, pixels.width - 1);
+        const y = THREE.MathUtils.clamp(Math.floor((1 - hit.uv.y) * pixels.height), 0, pixels.height - 1);
+        if (pixels.getContext('2d')!.getImageData(x, y, 1, 1).data[3] < 26) continue;
+        id = [...this.sprites].find(([, sprite]) => sprite === hit.object)?.[0];
+      }
+      if (id || building || !ground) return { position: { x: hit.point.x, z: hit.point.z }, id, building };
+      return { position: { x: ground.x, z: ground.z } };
+    }
+    if (ground) return { position: { x: ground.x, z: ground.z } };
+  }
   screenDirection(dx: number, dz: number) { const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0); const forward = new THREE.Vector3().subVectors(new THREE.Vector3(), this.camera.position); forward.y = 0; forward.normalize(); return { x: right.x * dx - forward.x * dz, z: right.z * dx - forward.z * dz }; }
   render(state: GameState, moving: boolean, mode: string, dx = 0, dz = 0, atBridge = false) {
     if (window.devicePixelRatio !== this.deviceRatio) this.resize();
-    const aspect = 16 / 9;
+    const aspect = this.viewport.x / this.viewport.y;
     if (mode !== 'explore' && this.highlightRing) this.highlightRing.visible = false;
     if (this.highlightRing) this.highlightRing.scale.setScalar(this.reduced ? 1 : 1 + Math.sin(this.clock.elapsedTime * 3)*0.06);
     const t = this.clock.getElapsedTime(); this.bokeh.enabled = ['title', 'ending'].includes(mode) && !this.reduced; const dt = Math.min(0.05, t - this.lastTime); this.lastTime = t;
@@ -415,25 +466,33 @@ export class World {
     });
     if (this.particles && !this.reduced) this.particles.rotation.y = Math.sin(t * 0.04) * 0.08;
     this.water.forEach(w => { (w.material as THREE.MeshStandardMaterial).opacity = 0.8 + Math.sin(t * 0.8) * 0.05; });
-    this.target.set(atBridge || this.battle ? 0 : mode === 'title' ? -3.5 : state.position.x * 0.45, 0, atBridge ? -8.4 : this.battle ? 0 : mode === 'title' ? -1 : state.position.z * 0.35);
+    const follow = THREE.MathUtils.smoothstep(aspect, 0.75, 1.55);
+    this.target.set(atBridge || this.battle ? 0 : mode === 'title' ? -3.5 * follow : state.position.x * (1 - 0.55 * follow), 0, atBridge ? -8.4 : this.battle ? 0 : mode === 'title' ? -1 : state.position.z * (1 - 0.65 * follow));
     this.cameraFocus.lerp(this.target, this.reduced ? 1 : 1 - Math.exp(-dt * (atBridge ? 3.8 : 2.8)));
-    const h = atBridge ? 8.2 : this.battle ? 11.8 * 0.78 : mode === 'title' ? 13.6 : 11.8;
-    this.camera.left = -h * aspect; this.camera.right = h * aspect; this.camera.top = h; this.camera.bottom = -h; this.camera.updateProjectionMatrix();
+    const height = atBridge ? Math.max(8.2, 4 / aspect) : this.battle ? Math.max(9.2, 8.5 / aspect) : mode === 'title' ? 13.6 : Math.max(11.8, 8 / aspect);
+    const shift = this.battle ? height * 0.22 * (1 - follow) : 0;
+    this.camera.left = -height * aspect; this.camera.right = height * aspect;
+    this.camera.top = height - shift; this.camera.bottom = -height - shift;
+    this.camera.updateProjectionMatrix();
     this.camera.position.copy(this.cameraFocus).add(new THREE.Vector3(atBridge ? 11 : 24, 28, 34)); this.camera.lookAt(this.cameraFocus); this.camera.updateMatrixWorld();
     if (this.quality === 'high') this.composer.render(); else this.renderer.render(this.scene, this.camera);
   }
-  resize() {
-    const canvas = this.renderer.domElement;
-    const width = canvas.clientWidth; const height = canvas.clientHeight;
+  resize(immediate = false) {
+    const { width, height } = this.renderer.domElement.getBoundingClientRect();
     if (!width || !height) return;
     const dpr = this.deviceRatio = window.devicePixelRatio;
-    const qualityRatio = this.quality === 'high' ? Math.min(dpr, 2) : Math.min(dpr * 0.75, 1);
-    const ratio = Math.min(qualityRatio, Math.sqrt(3840 * 2160 / (width * height)));
-    if (ratio !== this.renderer.getPixelRatio()) {
-      this.renderer.setPixelRatio(ratio); this.composer.setPixelRatio(ratio);
-    } else if (width === this.renderWidth && height === this.renderHeight) return;
-    this.renderWidth = width; this.renderHeight = height;
-    this.renderer.setSize(width, height, false); this.composer.setSize(width, height);
+    this.viewport.set(width, height);
+    clearTimeout(this.resizeTimer);
+    const resizeBuffers = () => {
+      const pixelsWide = Math.floor(width * dpr);
+      const pixelsHigh = Math.floor(height * dpr);
+      const canvas = this.renderer.domElement;
+      if (!immediate && canvas.width === pixelsWide && canvas.height === pixelsHigh && this.renderer.getPixelRatio() === dpr) return;
+      this.renderer.setDrawingBufferSize(width, height, dpr);
+      this.composer.setSize(pixelsWide, pixelsHigh);
+    };
+    if (immediate) resizeBuffers();
+    else this.resizeTimer = setTimeout(resizeBuffers, 150);
   }
   private disposeGroup(g: THREE.Group) { g.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.Points) o.geometry.dispose(); if (o instanceof THREE.Sprite) o.material.dispose();
       if (o instanceof THREE.Mesh && !Array.isArray(o.material) && ![...this.materials.values()].includes(o.material as THREE.MeshStandardMaterial)) o.material.dispose(); if (o instanceof THREE.Points) (o.material as THREE.Material).dispose(); }); g.clear(); }
