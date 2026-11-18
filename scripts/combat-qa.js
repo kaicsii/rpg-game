@@ -23,7 +23,7 @@ async page => {
   if(!report.visual.some(v=>v.source==='enemy-0'))throw new Error('Enemy attack was not animated');
   if(report.motion<0.5||report.fxFrames===0)throw new Error('Attack motion or visual effects missing');
   if(!report.sound.some(s=>s.effect==='fire'&&s.phase==='impact'&&s.context==='running'))throw new Error('Fire sound did not run');
-  await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true,strong:true});window.__starlight.encounter('forest-elite');});await ready();
+  await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true,strong:true});window.__starlight.encounter('forest-elite');});await page.keyboard.press('Escape');await ready();
   await act({kind:'attack'});await act({kind:'guard'});
   await act({kind:'skill',id:'heal',target:'loren'});
   while(await page.evaluate(()=>window.__starlight.getBattle().resonance<100))await act({kind:'guard'});
@@ -34,7 +34,7 @@ async page => {
   await page.evaluate(()=>window.__starlight.fixture('forest',{ready:true}));await page.keyboard.press('Escape');
   await page.getByRole('switch',{name:'減少動態效果'}).click();
   await page.locator('#volume').evaluate(el=>{el.value='0';el.dispatchEvent(new Event('input',{bubbles:true}));});await page.keyboard.press('Escape');
-  await page.evaluate(()=>window.__starlight.encounter('forest-elite'));await ready();
+  await page.evaluate(()=>window.__starlight.encounter('forest-elite'));await page.keyboard.press('Escape');await ready();
   await act({kind:'skill',id:'ember'});
   report=await page.evaluate(()=>window.combatQA);
   if(report.reducedMotion!==0||!report.visual.some(v=>v.reduced))throw new Error('Reduced-motion setting ignored');

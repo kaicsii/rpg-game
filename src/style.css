@@ -112,3 +112,8 @@
 .auto-policy{margin-top:10px;text-align:right}.auto-policy button{min-height:32px;padding:5px 8px;border:1px solid var(--line);font-size:12px;color:var(--gold)}
 @container game (max-width:900px){.auto-policy button{min-height:44px;width:100%}}
 @container game (max-width:900px){.enemy-card{max-height:max(96px,calc(54cqh - 110px));overflow-y:auto;overscroll-behavior:contain}}
+.bridge-title{position:absolute;top:7%;left:6%;display:grid;gap:8px;color:var(--gold);text-shadow:0 2px 12px #0b1915;animation:cover-in .75s ease both}
+.bridge-title strong{font-family:var(--serif);font-size:clamp(26px,4cqw,58px);font-weight:600;letter-spacing:.18em;color:#fbecd0}
+.bridge-title>span:last-child{display:flex;gap:10px;align-items:center}
+.bridge-title>span:last-child::after{content:'';height:1px;width:120px;background:linear-gradient(90deg,var(--gold),transparent)}
+.enemy-card:has(.enemy-intent.danger){border-color:#d991668c}

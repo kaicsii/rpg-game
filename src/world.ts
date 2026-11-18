@@ -36,6 +36,18 @@ export function pixelTexture(kind: string, frame = 0, direction = 0): THREE.Canv
       if (knight) { rect(27, 10, 2, 15, '#e9e4d3'); rect(24, 21, 7, 2, '#e0bd79'); }
       else { rect(28, 9, 2, 18, '#715541'); rect(26, 6, 6, 6, '#fff0b1'); }
     }
+  } else if (kind === 'guardian') {
+    const bark = '#544336', moss = '#6e8161', gold = '#ffcf7d';
+    rect(3, 8, 8, 3, bark); rect(5, 2, 3, 9, bark); rect(9, 5, 4, 8, moss);
+    rect(21, 4, 7, 4, moss); rect(25, 0, 3, 10, bark); rect(20, 7, 9, 5, bark);
+    rect(9, 10, 15, 23, bark); rect(11, 9, 11, 7, '#928365'); rect(11, 16, 3, 15, '#786044');
+    rect(11, 17, 3, 2, gold); rect(19, 17, 3, 2, gold); rect(16, 21, 2, 7, '#d18a55');
+    rect(15, 23, 5, 2, gold); rect(12, 31, 5, 6, bark); rect(18, 31, 5, 6, bark);
+    rect(6, 36, 11, 3, moss); rect(19, 36, 11, 3, moss);
+    const arm = frame === 2 ? 14 : frame === 4 ? 20 : 25;
+    rect(4, arm, 6, 8, bark); rect(23, arm - 2, 6, 10, bark);
+    rect(1, arm + 4, 6, 3, moss); rect(26, arm + 4, 6, 3, moss);
+    if (frame === 2) { rect(5, 17, 2, 3, gold); rect(26, 16, 2, 3, gold); }
   } else {
     const e = ENEMIES[kind] ?? ENEMIES.slime; const color = e.color;
     if (e.shape === 'slime') { rect(6, 23, 21, 12, color); rect(9, 19, 15, 5, color); rect(3, 30, 26, 6, color); rect(9, 25, 4, 4, '#e1fff2'); rect(12, 29, 2, 3, '#304d58'); rect(21, 29, 2, 3, '#304d58'); }
@@ -181,7 +193,9 @@ export class World {
       this.cylinder(-1, 0.8, 0, 1.2, 0.3, 0x577e75, 12); this.cylinder(-1, 1.1, 0, 0.3, 0.9, 0x9ca78d, 8);
       const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.55), this.material(0xffd494, true)); crystal.position.set(-1, 2, 0); this.root.add(crystal); this.obstacles.push({ x: -1, z: 0, w: 3.1, d: 3.1 });
       for (const [x, z] of [[-11, -6], [-12, 3], [4, -8], [10, -8], [-13, 9], [15, 8], [15, -8]]) this.tree(x, z, 1.1, rng);
-      for (const [x, z] of [[-4, 5], [4, 5], [-3, -5], [3, -5], [-10, 4]]) this.lamp(x, z, `street-${x}-${z}`);
+      const oldLantern = ZONES.village.objects.find(o => o.id === 'bridge-lantern')!;
+      this.lamp(oldLantern.x, oldLantern.z, oldLantern.id);
+      for (const [x, z] of [[4, 5], [-3, -5], [3, -5], [-10, 4]]) this.lamp(x, z, `street-${x}-${z}`);
       this.sprite('elder', -3, 2, 'elder'); this.sprite('merchant', 7, 4, 'merchant'); this.sprite('child', -7, 7, 'child', 0.85);
       for (let j = 0; j < 5; j++) { this.box(-3.8, 0.4, -7 + j * 1.5, 0.13, 0.85, 0.13, 0x8c8f71); this.box(-3.8, 0.5, -6.4 + j * 1.5, 0.1, 0.1, 1.5, 0x9c9a7b); }
     } else if (zone === 'forest') {
@@ -208,8 +222,19 @@ export class World {
     this.moon = new THREE.Mesh(new THREE.SphereGeometry(3.5, 24, 16), new THREE.MeshBasicMaterial({ color: zone === 'tower' ? 0xb7a8c0 : 0xeadfc0, fog: false })); this.moon.position.set(-24, 21, -37); this.root.add(this.moon);
     if (zone !== 'village') {
       this.gate = new THREE.Group(); this.root.add(this.gate);
-      for (const x of [-2, 2]) this.box(x, 1.7, -9.8, 0.55, 3.4, 0.7, 0x8c9d90);
-      this.box(0, 3.5, -9.8, 4.7, 0.4, 0.9, 0xa6b09a);
+      for (const x of [-2, 2]) this.box(x, 1.7, -9.8, 0.55, 3.4, 0.7, zone === 'forest' ? 0x685846 : 0x8c9d90);
+      this.box(0, 3.5, -9.8, 4.7, 0.4, 0.9, zone === 'forest' ? 0x776244 : 0xa6b09a);
+      if (zone === 'forest') {
+        const arch = new THREE.Mesh(new THREE.TorusGeometry(2, 0.22, 6, 14, Math.PI), this.material(0x6d8a62));
+        arch.position.set(0, 3.5, -9.8); arch.castShadow = true; this.root.add(arch);
+        this.box(0, 3.1, -9.8, 0.08, 0.6, 0.08, 0x474037);
+        this.cylinder(0, 2.73, -9.8, 0.35, 0.5, 0xba884d, 8);
+        this.box(0, 2.42, -9.8, 0.14, 0.2, 0.14, 0xffca77, this.root, true);
+        for (const x of [-2, 2]) {
+          this.box(x, 1.1, -9.35, 0.38, 0.09, 0.06, 0xf5c684, this.root, true);
+          this.box(x, 1.37, -9.35, 0.24, 0.09, 0.06, 0x89ceae, this.root, true);
+        }
+      }
       for (let i = -3; i <= 3; i++) this.box(i * 0.48, 1.7, -9.8, 0.06, 3, 0.06, 0x8fdbd4, this.gate, true);
     }
     this.addGrass(rng, zone);
@@ -287,7 +312,16 @@ export class World {
     this.sprite('lien', -3.5, 3.8, 'lien', 1.4); this.sprite('loren', -1, 5.5, 'loren', 1.4);
     b.enemies.forEach((e, i) => this.sprite(e.template, 2.4 + i * 2, -0.5 - i * 1.7, e.id, e.template === 'eclipse' ? 3 : b.encounter.required ? 2.5 : 1.8));
   }
-  syncBattle(b: Battle) { for (const a of [...b.heroes, ...b.enemies]) { const s = this.sprites.get(a.id); if (s) { s.material.opacity = a.hp > 0 ? 1 : 0.2; s.userData.shadow.visible = a.hp > 0; } } }
+  syncBattle(b: Battle) {
+    for (const a of [...b.heroes, ...b.enemies]) {
+      const s = this.sprites.get(a.id); if (!s) continue;
+      s.material.opacity = a.hp > 0 ? 1 : 0.2; s.userData.shadow.visible = a.hp > 0;
+      if ('template' in a && a.template === 'guardian') {
+        s.userData.charging = a.charging && !a.broken;
+        if (!s.userData.attack) s.material.map = this.texture('guardian', s.userData.charging ? 2 : 0);
+      }
+    }
+  }
   numberEffect(id: string, amount: number, healing = false) {
     const target = this.sprites.get(id); if (!target) return;
     const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 64; const c = canvas.getContext('2d')!;
@@ -331,7 +365,7 @@ export class World {
   }
   project(position: Vec2): { x: number; y: number } { const v = new THREE.Vector3(position.x, 1.4, position.z).project(this.camera); return { x: (v.x + 1) * 50, y: (-v.y + 1) * 50 }; }
   screenDirection(dx: number, dz: number) { const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0); const forward = new THREE.Vector3().subVectors(new THREE.Vector3(), this.camera.position); forward.y = 0; forward.normalize(); return { x: right.x * dx - forward.x * dz, z: right.z * dx - forward.z * dz }; }
-  render(state: GameState, moving: boolean, mode: string, dx = 0, dz = 0) {
+  render(state: GameState, moving: boolean, mode: string, dx = 0, dz = 0, atBridge = false) {
     if (window.devicePixelRatio !== this.deviceRatio) this.resize();
     const aspect = 16 / 9;
     if (mode !== 'explore' && this.highlightRing) this.highlightRing.visible = false;
@@ -347,6 +381,7 @@ export class World {
       for (const s of [this.player, this.companion]) s.userData.shadow.position.set(s.position.x, 0.07, s.position.z);
     }
     for (const [id, s] of this.sprites) {
+      if (id === 'forest-elite') s.material.map = this.texture('guardian', atBridge ? 2 : 0);
       if (id !== 'lien' && id !== 'loren' && !['elder', 'merchant', 'child'].includes(id) && !this.reduced && !s.userData.attack && !s.userData.hit) s.position.y = s.userData.restPosition.y + Math.sin(t * 2 + s.position.x) * 0.035;
       const attack = s.userData.attack;
       if (attack) {
@@ -355,7 +390,7 @@ export class World {
         if (attack.effect === 'slash') { const direction = attack.destination.clone().sub(attack.origin); direction.y = 0; s.position.addScaledVector(direction.normalize(), arc * 0.9); s.material.rotation = arc * -0.14; }
         else s.position.y += arc * 0.18;
         s.material.map = this.texture(s.userData.kind, p < 0.8 ? 4 : 0, 1);
-        if (p >= 1) { s.position.copy(attack.origin); s.material.rotation = 0; s.material.map = this.texture(s.userData.kind); delete s.userData.attack; }
+        if (p >= 1) { s.position.copy(attack.origin); s.material.rotation = 0; s.material.map = this.texture(s.userData.kind, s.userData.charging ? 2 : 0); delete s.userData.attack; }
       }
       const hit = s.userData.hit;
       if (hit) {
@@ -380,11 +415,11 @@ export class World {
     });
     if (this.particles && !this.reduced) this.particles.rotation.y = Math.sin(t * 0.04) * 0.08;
     this.water.forEach(w => { (w.material as THREE.MeshStandardMaterial).opacity = 0.8 + Math.sin(t * 0.8) * 0.05; });
-    this.target.set(this.battle ? 0 : mode === 'title' ? -3.5 : state.position.x * 0.45, 0, this.battle ? 0 : mode === 'title' ? -1 : state.position.z * 0.35);
-    this.cameraFocus.lerp(this.target, 1 - Math.exp(-dt * 2.8));
-    const h = this.battle ? 11.8 * 0.78 : mode === 'title' ? 13.6 : 11.8;
+    this.target.set(atBridge || this.battle ? 0 : mode === 'title' ? -3.5 : state.position.x * 0.45, 0, atBridge ? -8.4 : this.battle ? 0 : mode === 'title' ? -1 : state.position.z * 0.35);
+    this.cameraFocus.lerp(this.target, this.reduced ? 1 : 1 - Math.exp(-dt * (atBridge ? 3.8 : 2.8)));
+    const h = atBridge ? 8.2 : this.battle ? 11.8 * 0.78 : mode === 'title' ? 13.6 : 11.8;
     this.camera.left = -h * aspect; this.camera.right = h * aspect; this.camera.top = h; this.camera.bottom = -h; this.camera.updateProjectionMatrix();
-    this.camera.position.copy(this.cameraFocus).add(new THREE.Vector3(24, 28, 34)); this.camera.lookAt(this.cameraFocus); this.camera.updateMatrixWorld();
+    this.camera.position.copy(this.cameraFocus).add(new THREE.Vector3(atBridge ? 11 : 24, 28, 34)); this.camera.lookAt(this.cameraFocus); this.camera.updateMatrixWorld();
     if (this.quality === 'high') this.composer.render(); else this.renderer.render(this.scene, this.camera);
   }
   resize() {

@@ -10,6 +10,11 @@ export function newGame(): GameState {
   return { version: 1, leaderId: 'lien', discoveredObjectIds: [], zone: 'village', position: { x: 0, z: 6 }, party: [heroStats('lien', 1), heroStats('loren', 1)], xp: 0, gold: 40, inventory: { potion: 5, ether: 3, revive: 2 }, flags: [], defeated: [], mechanisms: {}, checkpoint: { zone: 'village', position: { x: 0, z: 5 } }, playSeconds: 0, settings: { volume: 0.35, quality: 'high', reducedMotion: false, autoStopLowHp: true } };
 }
 export const has = (state: GameState, flag: string) => state.flags.includes(flag);
+export const bridgeClueFlag = (hero: HeroId) => `bridge-clue-${hero}`;
+export function completeBridgeQuest(state: GameState): GameState {
+  if (!has(state, 'main-quest') || !(['lien', 'loren'] as const).some(hero => has(state, bridgeClueFlag(hero)))) return state;
+  return grantFlag(state, 'bridge-reward', draft => { draft.inventory.ether++; draft.inventory.potion += 2; });
+}
 export function grantFlag(state: GameState, flag: string, reward?: (draft: GameState) => void): GameState {
   if (has(state, flag)) return state;
   const next = structuredClone(state); next.flags.push(flag); reward?.(next); return next;
@@ -58,7 +63,7 @@ export function getObjective(state: GameState): { text: string; targetIds: strin
 }
 export const objective = (state: GameState) => getObjective(state).text;
 export function discoverNearby(state: GameState): boolean {
-  const added = ZONES[state.zone].objects.filter(o => ['chest','herb','memory','lore'].includes(o.kind) && !state.discoveredObjectIds.includes(o.id) && Math.hypot(o.x-state.position.x,o.z-state.position.z) <= 4).map(o => o.id);
+  const added = ZONES[state.zone].objects.filter(o => ['chest','herb','memory','lore','clue'].includes(o.kind) && !state.discoveredObjectIds.includes(o.id) && Math.hypot(o.x-state.position.x,o.z-state.position.z) <= 4).map(o => o.id);
   state.discoveredObjectIds.push(...added); return added.length > 0;
 }
 export function visibleMapObjects(state: GameState) {
@@ -67,15 +72,28 @@ export function visibleMapObjects(state: GameState) {
 }
 export const isHeavyRound = (round: number) => round % 3 === 0;
 export const shouldStopAutoAttack = (heroes: Hero[], enabled: boolean) => enabled && heroes.some(h => h.hp * 10 <= h.maxHp * 3);
+const guardian = (enemy: Enemy) => enemy.template === 'guardian';
+export function revealedWeaknesses(enemy: Enemy): Element[] {
+  if (!guardian(enemy)) return [enemy.weakness];
+  return enemy.revealed.filter(element => element === enemy.weakness || (enemy.charging && element === 'slash'));
+}
+export function enemyThreat(battle: Battle, enemy: Enemy): boolean {
+  return enemy.hp > 0 && !enemy.broken && battle.order.slice(battle.cursor).includes(enemy.id)
+    && (guardian(enemy) ? enemy.charging : isHeavyRound(battle.round));
+}
 export function enemyIntent(battle: Battle, enemy: Enemy): string {
   if (enemy.hp <= 0) return '';
-  if (enemy.broken) return '破盾：下次行動取消';
+  if (enemy.broken) return enemy.recovering ? '破盾：趁恢復前追擊' : enemy.charging ? '破盾：橫掃已打斷' : '破盾：下次行動取消';
+  if (guardian(enemy)) {
+    if (enemy.charging) return enemyThreat(battle, enemy) ? '本回合根鬚橫掃！破盾可打斷' : '蓄力：下回合橫掃全隊';
+    return battle.round % 3 === 2 && battle.order.slice(battle.cursor).includes(enemy.id) ? '本回合蓄力，將露出根鬚接縫' : '根鬚收攏：留意下一次蓄力';
+  }
   if (!battle.order.slice(battle.cursor).includes(enemy.id)) return `第 ${Math.ceil((battle.round+1)/3)*3} 回合重擊`;
   return isHeavyRound(battle.round) ? '本回合重擊！' : `第 ${Math.ceil(battle.round/3)*3} 回合重擊`;
 }
 export function combatStatuses(battle: Battle, id: string): string[] {
   const enemy = battle.enemies.find(e => e.id === id);
-  if (enemy) return enemy.hp <= 0 ? [] : [...(enemy.broken ? ['破盾：跳過下次行動、受到傷害增加'] : []), ...(enemy.armor > 0 ? [`碎甲：防禦降低，剩 ${enemy.armor} 次敵方行動`] : [])];
+  if (enemy) return enemy.hp <= 0 ? [] : [...(enemy.broken ? [enemy.recovering ? '破盾：在敵人下次行動前，受到傷害增加' : '破盾：跳過下次行動、受到傷害增加'] : []), ...(enemy.armor > 0 ? [`碎甲：防禦降低，剩 ${enemy.armor} 次敵方行動`] : [])];
   return [...(battle.guarding.includes(id) ? ['防禦：減少傷害，直到下次出手'] : []), ...(battle.cover === id ? ['護衛：承受同伴下一次攻擊'] : [])];
 }
 export function canLeave(state: GameState): string | null {
@@ -90,7 +108,7 @@ export function travel(state: GameState, direction: 1 | -1): GameState {
   next.checkpoint = { zone: next.zone, position: { x: 0, z: direction === 1 ? 8.5 : -9 } };
   return next;
 }
-export interface Enemy { id: string; template: string; name: string; hp: number; maxHp: number; atk: number; def: number; speed: number; weakness: Element; shield: number; broken: boolean; armor: number; phase: number; }
+export interface Enemy { id: string; template: string; name: string; hp: number; maxHp: number; atk: number; def: number; speed: number; weakness: Element; shield: number; maxShield: number; revealed: Element[]; charging: boolean; broken: boolean; recovering?: boolean; armor: number; phase: number; }
 export interface Battle {
   encounter: Encounter; heroes: Hero[]; enemies: Enemy[]; inventory: Record<ItemId, number>;
   order: string[]; cursor: number; round: number; resonance: number; guarding: string[]; cover: string | null;
@@ -101,7 +119,8 @@ export interface BattleEvent { source?: string; effect?: CombatEffect; text: str
 export const currentActor = (b: Battle) => b.order[b.cursor];
 export function startBattle(state: GameState, encounter: Encounter): Battle {
   const b: Battle = { encounter: structuredClone(encounter), heroes: structuredClone(state.party), inventory: { ...state.inventory }, enemies: encounter.enemies.map((key, i) => {
-    const e = ENEMIES[key]; return { id: `enemy-${i}`, template: key, name: e.name, hp: e.hp, maxHp: e.hp, atk: e.atk, def: e.def, speed: e.speed, weakness: e.weakness, shield: 2, broken: false, armor: 0, phase: 1 };
+    const e = ENEMIES[key]; const maxShield = key === 'guardian' ? 3 : 2;
+    return { id: `enemy-${i}`, template: key, name: e.name, hp: e.hp, maxHp: e.hp, atk: e.atk, def: e.def, speed: e.speed, weakness: e.weakness, shield: maxShield, maxShield, revealed: [], charging: false, broken: false, armor: 0, phase: 1 };
   }), order: [], cursor: 0, round: 1, resonance: 0, guarding: [], cover: null, status: 'active', log: ['星燈與你同在。'] };
   b.order = turnOrder(b); return b;
 }
@@ -151,9 +170,12 @@ export function resolveAction(input: Battle, action: Action, level: number): { b
     const amount = damage(hero.atk, e.armor > 0 ? e.def / 2 : e.def, power, e.broken);
     e.hp = Math.max(0, e.hp - amount); if (armor) e.armor = 2;
     events.push({ type: 'damage', source: hero.id, effect: action.kind === 'resonance' ? 'resonance' : element, target: e.id, amount, text: `${e.name}受到 ${amount} 點傷害。` });
-    if (element === e.weakness && !e.broken && e.hp > 0) {
+    if (element && (element === e.weakness || (guardian(e) && e.charging && element === 'slash')) && !e.broken && e.hp > 0) {
+      if (guardian(e) && !e.revealed.includes(element)) {
+        e.revealed.push(element); events.push({ type: 'info', text: `發現古橋守木的弱點：${element === 'slash' ? '斬擊（蓄力時）' : '火焰'}。` });
+      }
       e.shield--; b.resonance = Math.min(100, b.resonance + 8);
-      if (e.shield <= 0) { e.broken = true; events.push({ type: 'break', target: e.id, text: `${e.name}破盾！將失去下一次行動。` }); }
+      if (e.shield <= 0) { e.broken = true; events.push({ type: 'break', target: e.id, text: `${e.name}破盾！${e.charging ? '根鬚橫掃已打斷。' : '將失去下一次行動。'}` }); }
     }
   }
   if (action.kind !== 'resonance') b.resonance = Math.min(100, b.resonance + 14);
@@ -166,11 +188,34 @@ export function advanceEnemies(input: Battle): { battle: Battle; events: BattleE
     if (hero && hero.hp > 0) break;
     const e = b.enemies.find(e => e.id === id);
     if (e && e.hp > 0) {
-      if (e.broken) { e.broken = false; e.shield = 2; events.push({ type: 'info', text: `${e.name}踉蹌著重整姿態，跳過行動。` }); }
+      if (e.recovering) {
+        e.broken = false; e.recovering = false; e.shield = e.maxShield;
+        events.push({ type: 'info', text: '古橋守木的根鬚重新合攏，護盾恢復。' });
+      }
+      if (e.broken) {
+        e.charging = false;
+        if (guardian(e)) e.recovering = true;
+        else { e.broken = false; e.shield = e.maxShield; }
+        events.push({ type: 'info', text: `${e.name}踉蹌著重整姿態，跳過行動。` });
+      } else if (guardian(e) && e.charging) {
+        e.charging = false; e.shield = e.maxShield;
+        const living = b.heroes.filter(h => h.hp > 0);
+        const protector = living.find(h => h.id === b.cover);
+        for (const ally of living) {
+          const target = protector && protector.hp > 0 && ally.id !== protector.id ? protector : ally;
+          const amount = Math.max(1, Math.round(damage(e.atk, target.def, 1.65) * (b.guarding.includes(target.id) ? 0.45 : 1)));
+          target.hp = Math.max(0, target.hp - amount);
+          events.push({ type: 'damage', source: e.id, effect: 'slash', target: target.id, amount, text: `${e.name}以根鬚橫掃${target.name}，造成 ${amount} 點傷害。` });
+        }
+        b.cover = null;
+      } else if (guardian(e) && b.round % 3 === 2) {
+        e.charging = true; e.shield = Math.min(e.shield, 2);
+        events.push({ type: 'info', text: '古橋守木正在蓄力，根鬚接縫露出；下次行動將橫掃全隊。' });
+      }
       else {
         const living = b.heroes.filter(h => h.hp > 0); let target = living[(b.round + b.cursor) % living.length];
         if (b.cover && target.id !== b.cover) { target = b.heroes.find(h => h.id === b.cover && h.hp > 0) ?? target; b.cover = null; }
-        const strong = isHeavyRound(b.round); const amount = Math.max(1, Math.round(damage(e.atk, target.def, strong ? 1.6 : 1) * (b.guarding.includes(target.id) ? 0.45 : 1)));
+        const strong = !guardian(e) && isHeavyRound(b.round); const amount = Math.max(1, Math.round(damage(e.atk, target.def, strong ? 1.6 : 1) * (b.guarding.includes(target.id) ? 0.45 : 1)));
         target.hp = Math.max(0, target.hp - amount);
         events.push({ type: 'damage', source: e.id, effect: ['wisp', 'moth'].includes(e.template) ? 'star' : 'slash', target: target.id, amount, text: `${e.name}${strong ? '蓄力重擊' : '攻擊'}${target.name}，造成 ${amount} 點傷害。` });
       }

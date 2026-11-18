@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ZONES, SKILLS, type GameState, type Encounter } from './data';
-import { newGame, levelFor, heroStats, damage, startBattle, resolveAction, advanceEnemies, currentActor, finishBattle, grantFlag, saveGame, loadGame, validSave, refreshStats, healParty, puzzleSolved, canLeave, travel, applyItem, type Battle, type Action } from './game';
+import { newGame, levelFor, heroStats, damage, startBattle, resolveAction, advanceEnemies, currentActor, finishBattle, grantFlag, bridgeClueFlag, completeBridgeQuest, revealedWeaknesses, enemyThreat, saveGame, loadGame, validSave, refreshStats, healParty, puzzleSolved, canLeave, travel, applyItem, type Battle, type Action } from './game';
 const fixture = (id: string): Encounter => Object.values(ZONES).flatMap(z => z.encounters).find(e => e.id === id)!;
 const ready = (xp = 160) => { const s = newGame(); s.xp = xp; refreshStats(s); healParty(s); return s; };
 
@@ -17,7 +17,7 @@ test('speed order, MP consumption, invalid actions preserve input', () => {
   assert.ok(resolveAction(b, { kind: 'skill', id: 'meteor' }, 1).error);
 });
 test('two weak hits break shield; next enemy turn skips and restores shield', () => {
-  let b = startBattle(newGame(), fixture('forest-elite')); b.enemies[0].hp = b.enemies[0].maxHp = 1000;
+  let b = startBattle(newGame(), fixture('f1')); b.enemies[0].hp = b.enemies[0].maxHp = 1000;
   b.enemies[0].shield = 1;
   let r = resolveAction(b, { kind: 'skill', id: 'ember' }, 1); b = r.battle;
   assert.equal(b.enemies[0].broken, true); const hp = b.heroes.map(h => h.hp);
@@ -168,7 +168,75 @@ test('four-unit discovery boundary is persistent, idempotent and hides collected
   s.position={x:9,z:5.01};assert.ok(!s.discoveredObjectIds.includes('herb-2'));discoverNearby(s);assert.ok(!s.discoveredObjectIds.includes('herb-2'));
 });
 test('heavy intents, status durations, spent actions and low-health protection share battle rules',async()=>{
-  const {enemyIntent,combatStatuses,shouldStopAutoAttack,isHeavyRound}=await import('./game');const b=startBattle(ready(),fixture('forest-elite'));const e=b.enemies[0];
+  const {enemyIntent,combatStatuses,shouldStopAutoAttack,isHeavyRound}=await import('./game');const b=startBattle(ready(),fixture('water-elite'));const e=b.enemies[0];
   assert.equal(isHeavyRound(3),true);assert.equal(isHeavyRound(4),false);b.round=3;assert.equal(enemyIntent(b,e),'本回合重擊！');e.broken=true;assert.match(enemyIntent(b,e),/取消/);e.armor=2;assert.equal(combatStatuses(b,e.id).length,2);b.guarding=['loren'];b.cover='loren';assert.equal(combatStatuses(b,'loren').length,2);e.hp=0;assert.equal(enemyIntent(b,e),'');assert.deepEqual(combatStatuses(b,e.id),[]);
   const h=b.heroes[0];h.maxHp=100;h.hp=31;assert.equal(shouldStopAutoAttack(b.heroes,true),false);h.hp=30;assert.equal(shouldStopAutoAttack(b.heroes,true),true);assert.equal(shouldStopAutoAttack(b.heroes,false),false);h.hp=0;assert.equal(shouldStopAutoAttack(b.heroes,true),true);
+});
+
+test('either bridge clue can independently earn the reward once and survives a save roundtrip', () => {
+  for (const hero of ['lien', 'loren'] as const) {
+    const initial = grantFlag(newGame(), 'main-quest');
+    assert.equal(completeBridgeQuest(initial), initial);
+    const clue = grantFlag(initial, bridgeClueFlag(hero));
+    const rewarded = completeBridgeQuest(clue);
+    assert.equal(rewarded.inventory.potion, initial.inventory.potion + 2);
+    assert.equal(rewarded.inventory.ether, initial.inventory.ether + 1);
+    const both = grantFlag(rewarded, bridgeClueFlag(hero === 'lien' ? 'loren' : 'lien'));
+    assert.equal(completeBridgeQuest(both), both);
+    const saves = new Map<string, string>();
+    const storage = { getItem: (key: string) => saves.get(key) ?? null, setItem: (key: string, data: string) => { saves.set(key, data); } };
+    assert.equal(saveGame(storage, 'auto', both), null);
+    assert.deepEqual(loadGame(storage, 'auto').state, both);
+  }
+});
+
+test('interrupting the guardian reveals weaknesses, opens a resonance window, then restores the shield', () => {
+  let battle = startBattle(ready(22), fixture('forest-elite'));
+  const round = (lien: Action, loren: Action) => {
+    battle = resolveAction(battle, lien, 2).battle;
+    battle = resolveAction(battle, loren, 2).battle;
+    battle = advanceEnemies(battle).battle;
+  };
+  const ember: Action = { kind: 'skill', id: 'ember' };
+  assert.deepEqual(revealedWeaknesses(battle.enemies[0]), []);
+  round({ kind: 'attack' }, { kind: 'attack' });
+  assert.equal(battle.enemies[0].shield, 3);
+  round(ember, { kind: 'guard' });
+  assert.equal(battle.round, 3);
+  assert.deepEqual(revealedWeaknesses(battle.enemies[0]), ['fire']);
+  assert.equal(enemyThreat(battle, battle.enemies[0]), true);
+  assert.equal(battle.enemies[0].shield, 2);
+  battle = resolveAction(battle, ember, 2).battle;
+  const result = resolveAction(battle, { kind: 'attack' }, 2);
+  assert.deepEqual(revealedWeaknesses(result.battle.enemies[0]), ['fire', 'slash']);
+  assert.ok(result.events.some(event => event.type === 'break' && event.text.includes('打斷')));
+  assert.equal(enemyThreat(result.battle, result.battle.enemies[0]), false);
+  const aftermath = advanceEnemies(result.battle);
+  assert.ok(aftermath.events.every(event => event.type !== 'damage'));
+  assert.equal(aftermath.battle.enemies[0].shield, 0);
+  assert.deepEqual(revealedWeaknesses(aftermath.battle.enemies[0]), ['fire']);
+  battle = aftermath.battle;
+  assert.equal(battle.resonance, 100);
+  const wounded = battle.enemies[0];
+  const followup = resolveAction(battle, { kind: 'resonance' }, 2);
+  assert.equal(followup.events.find(event => event.type === 'damage')?.amount, damage(battle.heroes[0].atk, wounded.def, 3.8, true));
+  battle = followup.battle;
+  battle = advanceEnemies(resolveAction(battle, { kind: 'guard' }, 2).battle).battle;
+  assert.equal(battle.enemies[0].shield, 3);
+  assert.equal(battle.enemies[0].broken, false);
+});
+
+test('an unbroken guardian attacks both heroes and respects their guard', () => {
+  let battle = startBattle(ready(22), fixture('forest-elite'));
+  for (let turn = 0; turn < 6; turn++) {
+    const action = { kind: turn === 5 ? 'attack' : 'guard' } as const;
+    const result = advanceEnemies(resolveAction(battle, action, 2).battle);
+    battle = result.battle;
+    if (turn === 5) {
+      const hits = result.events.filter(event => event.type === 'damage');
+      assert.deepEqual(hits.map(event => event.target), ['lien', 'loren']);
+      assert.ok(hits[0].amount! < hits[1].amount!);
+      assert.equal(battle.enemies[0].charging, false);
+    }
+  }
 });

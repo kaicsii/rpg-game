@@ -1,0 +1,102 @@
+async page => {
+  const checks = [], errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const check = (ok, label) => { if (!ok) throw new Error(label); checks.push(label); };
+  const state = () => page.evaluate(() => window.__starlight.getState());
+  const battle = () => page.evaluate(() => window.__starlight.getBattle());
+  const interact = id => page.evaluate(id => window.__starlight.interact(id), id);
+  const skip = () => page.keyboard.press('Escape');
+  const ready = () => page.waitForFunction(() => window.__starlight.getMode() === 'battle' && !document.querySelector('.battle-thinking'));
+  const act = async action => { await page.evaluate(action => window.__starlight.action(action), action); await ready(); };
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('http://localhost:5173');
+  await page.getByRole('button', { name: '啟程 BEGIN YOUR JOURNEY' }).click();
+  await skip();
+  await interact('elder');
+  await skip();
+  await page.evaluate(() => window.__starlight.moveTo(-4, 5.8));
+  await page.getByRole('button', { name: /讀取燈中記憶/ }).click();
+  check((await page.locator('.dialogue-heading').innerText()).includes('莉恩'), 'Lantern keeper reads the old light');
+  await skip();
+  await interact('elder');
+  const before = (await state()).inventory;
+  await skip();
+  const rewarded = await state();
+  check(rewarded.flags.includes('bridge-reward') && rewarded.inventory.potion === before.potion + 2 && rewarded.inventory.ether === before.ether + 1, 'One clue earns the quest reward');
+  await page.getByRole('button', { name: '設洛恩為帶隊角色' }).click();
+  await page.evaluate(() => window.__starlight.moveTo(-4, 5.8));
+  await page.getByRole('button', { name: /辨認守衛暗號/ }).click();
+  check((await page.locator('.dialogue-heading').innerText()).includes('洛恩'), 'Knight reads a different clue from the same lantern');
+  await skip();
+  await interact('elder');
+  await skip();
+  check(JSON.stringify((await state()).inventory) === JSON.stringify(rewarded.inventory), 'Second clue cannot duplicate the reward');
+  await page.reload();
+  await page.getByRole('button', { name: '繼續旅程', exact: true }).click();
+  await page.locator('.save-slot').first().getByRole('button', { name: '讀取記錄' }).click();
+  await page.keyboard.press('j');
+  const journal = await page.locator('.menu-scroll').innerText();
+  check(journal.includes('✓ 橋上未響的鈴') && journal.includes('莉恩聽見') && journal.includes('洛恩認出'), 'Completed quest and both clues persist in the journal after reload');
+  await skip();
+  const modules = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name));
+  const audioModule = modules.find(url => new URL(url).pathname === '/src/audio.ts');
+  await page.evaluate(async url => {
+    const { AudioDirector } = await import(url);
+    const original = AudioDirector.prototype.setScore;
+    const notes = AudioDirector.prototype.note;
+    window.forestScores = [];
+    window.forestNotes = [];
+    AudioDirector.prototype.setScore = function (score, battle) {
+      window.forestScores.push(score);
+      return original.call(this, score, battle);
+    };
+    AudioDirector.prototype.note = function (frequency, ...args) {
+      if (this.context?.state === 'running') window.forestNotes.push(this.score);
+      return notes.call(this, frequency, ...args);
+    };
+  }, audioModule);
+  await interact('forest-exit');
+  await skip();
+  await page.waitForFunction(() => window.forestNotes.includes('forest'));
+  await page.evaluate(() => window.__starlight.encounter('forest-elite'));
+  check(await page.locator('.bridge-title').count() === 0 && (await page.locator('#toast').innerText()).includes('先完成'), 'Guardian intro respects the lantern gate');
+  for (const id of ['beacon-1', 'beacon-2', 'beacon-3']) await interact(id);
+  await page.evaluate(() => window.__starlight.encounter('forest-elite'));
+  await page.locator('.bridge-title').waitFor();
+  await page.waitForFunction(() => window.forestNotes.includes('guardian'));
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: 'output/playwright/forest-guardian-intro.png' });
+  check(await page.evaluate(() => window.forestScores.at(-1) === 'guardian'), 'Guardian scene starts its own score');
+  await skip();
+  await ready();
+  check((await page.locator('.weakness').innerText()).includes('未發現') && (await page.locator('.shield').innerText()).includes('3/3'), 'Guardian starts with hidden weakness and three shield points');
+  await act({ kind: 'attack' }); await act({ kind: 'attack' });
+  await act({ kind: 'skill', id: 'ember' }); await act({ kind: 'guard' });
+  check((await page.locator('.weakness').innerText()).includes('火焰') && (await page.locator('.enemy-intent').innerText()).includes('根鬚橫掃') && await page.locator('.turn-token.threat').count() === 1, 'A tested weakness and charge are shown in the HUD');
+  const hp = (await battle()).heroes.map(hero => hero.hp);
+  await act({ kind: 'skill', id: 'ember' }); await act({ kind: 'attack' });
+  const broken = await battle();
+  check(broken.enemies[0].broken && broken.heroes.every((hero, index) => hero.hp === hp[index]) && broken.log.some(line => line.includes('橫掃已打斷')), 'Breaking the charge stops all sweep damage and leaves a follow-up window');
+  await page.setViewportSize({ width: 390, height: 844 });
+  check(await page.locator('.enemy-card').evaluate(el => {
+    const card = el.getBoundingClientRect(), game = document.querySelector('#game').getBoundingClientRect();
+    return card.right <= game.right && card.bottom <= game.bottom && card.top >= game.top;
+  }), 'Guardian HUD stays inside the portrait letterbox');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await act({ kind: 'resonance' });
+  while ((await battle()).status === 'active') {
+    const current = await battle();
+    check(current.round < 8, 'Guardian can be finished within the expected rounds');
+    await act(current.order[current.cursor] === 'lien' ? { kind: 'skill', id: 'ember' } : { kind: 'attack' });
+  }
+  await page.locator('[data-action="battle:end"]').click();
+  check((await page.locator('.dialogue-panel').innerText()).includes('兩短一長'), 'Optional clue changes the victory scene');
+  await skip();
+  check(await page.evaluate(() => window.forestScores.at(-1) === 'forest'), 'Forest score resumes after victory');
+  await interact('waterway-exit');
+  await skip();
+  check((await state()).zone === 'waterway' && (await state()).defeated.includes('forest-elite'), 'Chapter still leads into the waterway');
+  check(errors.length === 0, 'No browser errors');
+  return { checks, errors };
+}

@@ -12,7 +12,7 @@ export interface GameState {
   mechanisms: Record<string, number>; checkpoint: { zone: ZoneId; position: Vec2 };
   playSeconds: number; settings: Settings;
 }
-export interface Interactable extends Vec2 { id: string; label: string; kind: 'npc' | 'lamp' | 'mechanism' | 'chest' | 'herb' | 'memory' | 'exit' | 'back' | 'lore'; }
+export interface Interactable extends Vec2 { id: string; label: string; kind: 'npc' | 'lamp' | 'mechanism' | 'chest' | 'herb' | 'memory' | 'exit' | 'back' | 'lore' | 'clue'; }
 export interface Encounter extends Vec2 { id: string; enemies: string[]; required?: boolean; }
 export interface Zone { id: ZoneId; name: string; subtitle: string; chapter: string; description: string; color: string; objects: Interactable[]; encounters: Encounter[]; }
 export const ZONES: Record<ZoneId, Zone> = {
@@ -25,6 +25,7 @@ export const ZONES: Record<ZoneId, Zone> = {
       { id: 'child', label: '米菈', kind: 'npc', x: -7, z: 7 },
       { id: 'village-lamp', label: '星燈 · 休息與記錄', kind: 'lamp', x: 1.8, z: 1 },
       { id: 'village-chest', label: '旅人的補給', kind: 'chest', x: 8, z: -3 },
+      { id: 'bridge-lantern', label: '古橋的舊提燈', kind: 'clue', x: -4, z: 5 },
       { id: 'forest-exit', label: '前往螢光森林', kind: 'exit', x: 0, z: -10.2 },
     ], encounters: [],
   },
@@ -117,6 +118,23 @@ export const ITEMS: Record<ItemId, { name: string; description: string; price: n
 };
 export const ELEMENT_NAMES: Record<Element, string> = { fire: '火焰', star: '星光', slash: '斬擊' };
 export const ZONE_ORDER: ZoneId[] = ['village', 'forest', 'waterway', 'tower'];
+export const BRIDGE_CLUES: Record<HeroId, { action: string; summary: string; lines: string[][] }> = {
+  lien: { action: '讀取燈中記憶', summary: '莉恩聽見守橋人的約定：舊鈴一響，等候的人就能回家。暖火曾讓緊閉的樹皮鬆開。', lines: [
+    ['莉恩', '讓我用提燈照一照……火苗裡有個人。他把一串不響的鈴掛在橋上，說要等最後一個人回來。'],
+    ['記憶中的守橋人', '別怕，讓我把燈留給你。你看，連橋邊緊閉的樹皮，也向這點暖火鬆開了。'],
+    ['莉恩', '原來它還在等人。我們把這段記憶帶給婆婆吧。'],
+  ] },
+  loren: { action: '辨認守衛暗號', summary: '洛恩認出提燈上的「兩短一長」是歸隊信號。舊刻痕標出守木根鬚的接縫。', lines: [
+    ['洛恩', '兩道短痕，一道長痕……這是守橋人的歸隊暗號。看，提燈底部還刻了古橋。'],
+    ['洛恩', '圖上把根鬚的接縫刻得很深。若枝根封住橋面，往接縫下劍，或許就能打開缺口。'],
+    ['莉恩', '你竟然還記得這些。把你的發現告訴婆婆吧，她也許知道那串鈴等的是誰。'],
+  ] },
+};
+export const GUARDIAN_INTRO = [
+  ['旁白', '三盞路燈映進河裡。古橋的鈴無風自響，原本垂向水面的根鬚，正一根根抬起。'],
+  ['洛恩', '它在護橋。你看樹皮底下的光——它聚起根鬚時，接縫就會露出來。'],
+  ['莉恩', '那就先試出哪種攻擊能鬆開護盾。等它蓄力，再把根鬚打散！'],
+];
 export const OPENING = [
   ['序章', '月蝕之夜將至。霧鐘村的星燈，已經七日沒有亮起。'],
   ['莉恩', '婆婆說，只要還有人記得彼此，燈火就不會真正熄滅。可是……這一次，為什麼連鐘聲都變輕了？'],

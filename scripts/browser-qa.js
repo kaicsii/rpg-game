@@ -28,6 +28,7 @@ async (page) => {
   await page.evaluate(() => { for (const id of ['beacon-1', 'beacon-2', 'beacon-3', 'herb-1', 'herb-2', 'herb-3']) window.__starlight.interact(id); });
   async function fight(id, lamp) {
     await page.evaluate(({ id, lamp }) => { window.__starlight.interact(lamp); window.__starlight.encounter(id); }, { id, lamp });
+    if (id === 'forest-elite') await page.getByRole('button', { name: '略過對話' }).click();
     await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
     let count = 0;
     while (count++ < 400) {

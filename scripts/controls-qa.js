@@ -16,7 +16,7 @@ async page => {
   check(await page.evaluate(()=>window.__starlight.getState().flags.includes('village-letter')),'Esc collects lore');
   await page.evaluate(()=>window.__starlight.interact('forest-exit'));await page.keyboard.press('Escape');
   check(await page.evaluate(()=>window.__starlight.getState().zone==='forest'),'Esc completes zone transition');
-  await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true,strong:true});window.__starlight.encounter('forest-elite');});await ready();
+  await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true,strong:true});window.__starlight.encounter('forest-elite');});await page.keyboard.press('Escape');await ready();
   check((await auto().getAttribute('aria-pressed'))==='false','Auto attack starts disabled');
   await page.keyboard.press('a');await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'a',repeat:true})));
   check((await auto().getAttribute('aria-pressed'))==='true','Holding A does not repeatedly toggle auto');await page.waitForSelector('.battle-thinking');

@@ -21,7 +21,7 @@ async page => {
   await load(()=>{const s=window.__starlight.getState();delete s.leaderId;delete s.discoveredObjectIds;delete s.settings.autoStopLowHp;localStorage.setItem('starlight:manual',JSON.stringify(s));});
   check(await page.evaluate(()=>window.__starlight.getState().leaderId==='lien'&&window.__starlight.getState().settings.autoStopLowHp),'Old save loads with defaults');
   await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true,strong:true});const s=window.__starlight.getState();s.party.forEach(h=>h.hp=Math.ceil(h.maxHp*.31));s.settings.reducedMotion=true;localStorage.setItem('starlight:manual',JSON.stringify(s));});
-  await load(()=>{});await page.evaluate(()=>window.__starlight.encounter('forest-elite'));await ready();await page.keyboard.press('a');
+  await load(()=>{});await page.evaluate(()=>window.__starlight.encounter('forest-elite'));await page.keyboard.press('Escape');await ready();await page.keyboard.press('a');
   await page.waitForFunction(()=>document.querySelector('[data-action="auto-attack"]').getAttribute('aria-pressed')==='false'&&window.__starlight.getBattle().round>=2);
   const stopped=await page.evaluate(()=>window.__starlight.getBattle());check(stopped.heroes.some(h=>h.hp<=h.maxHp*.3),'Low health stops auto after enemy response');const logLength=stopped.log.length;await page.waitForTimeout(600);check(await page.evaluate(n=>window.__starlight.getBattle().log.length===n,logLength),'No additional queued attack after protection');
   await page.keyboard.press('a');check((await page.locator('[data-action="auto-attack"]').getAttribute('aria-pressed'))==='false','Protected low-health party cannot reenable');
@@ -38,7 +38,7 @@ async page => {
     await page.setViewportSize({width,height});await page.evaluate(()=>window.__starlight.fixture('forest',{ready:true,strong:true}));
     if(width<=900){await page.locator('.map-open').click();}else await page.keyboard.press('m');
     const fits=await page.locator('.menu-panel').evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;});check(fits,`Map RWD ${width}×${height}`);await page.keyboard.press('Escape');
-    await page.evaluate(()=>window.__starlight.encounter('forest-elite'));await ready();await page.screenshot({path:`output/playwright/adventure-${width}.png`});
+    await page.evaluate(()=>window.__starlight.encounter('forest-elite'));await page.keyboard.press('Escape');await ready();await page.screenshot({path:`output/playwright/adventure-${width}.png`});
   }
   check(errors.length===0,'No browser errors');return {checks,errors};
 }
