@@ -4,18 +4,54 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { ENEMIES, ZONES, type CombatEffect, type GameState, type ZoneId, type Vec2 } from './data';
-import { type Battle, puzzleSolved } from './game';
+import { ENEMIES, ALL_ZONES as ZONES, type CombatEffect, type GameState, type Interactable, type ZoneId, type Vec2 } from './data';
+import { type Battle, areaObjects, puzzleSolved } from './game';
+import { MEDIUM_NOTES, MEDIUM_QUESTS, MEDIUM_TALKS } from './medium-content';
+import { isMedium, mediumDestination } from './medium';
+import lienAtlas from './assets/lien-sprites.png';
+import lorenAtlas from './assets/loren-sprites.png';
 
 export type Obstacle = { x: number; z: number; w: number; d: number };
 const palette = { grass: 0x477366, dark: 0x254e49, stone: 0x6f827d, gold: 0xe7bd75, roof: 0x6f5254 };
 function seeded(seed: number) { return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
-export function pixelTexture(kind: string, frame = 0, direction = 0): THREE.CanvasTexture {
+const heroAtlasUrls = { lien: lienAtlas, loren: lorenAtlas };
+const heroAtlases: Partial<Record<keyof typeof heroAtlasUrls, HTMLImageElement>> = {};
+const heroCell = { width: 52, height: 64, count: 4 };
+const npcCoats: Record<string, string> = { 'station-mother': '#b28c85', 'station-chief': '#82729b', 'highland-workshop': '#bf855b', 'highland-injured': '#719ab1', 'archive-host': '#c3b88e', 'archive-reader-1': '#aa889c', 'archive-reader-2': '#997656', 'archive-reader-3': '#647e92', 'village-neighbor': '#74906d' };
+
+export async function loadHeroAtlases() {
+  await Promise.allSettled(Object.entries(heroAtlasUrls).map(async ([id, url]) => {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    if (image.naturalWidth === heroCell.width * heroCell.count && image.naturalHeight === heroCell.height * heroCell.count) {
+      heroAtlases[id as keyof typeof heroAtlasUrls] = image;
+    }
+  }));
+}
+
+export function pixelTexture(kind: string, frame = 0, direction = 0, portrait = false): THREE.CanvasTexture {
+  const atlas = heroAtlases[kind as keyof typeof heroAtlasUrls];
+  if (atlas) {
+    const canvas = document.createElement('canvas');
+    const { width, height } = heroCell;
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d')!;
+    context.imageSmoothingEnabled = false;
+    if (portrait) {
+      context.drawImage(atlas, 8, 3, 36, 39, 2, 0, 48, 52);
+    } else {
+      const column = frame === 4 ? 3 : [0, 1, 0, 2][frame];
+      context.drawImage(atlas, column * width, direction * height, width, height, 0, 0, width, height);
+    }
+    return nearestTexture(canvas);
+  }
   const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 40;
   const c = canvas.getContext('2d')!; const rect = (x: number, y: number, w: number, h: number, color: string) => { c.fillStyle = color; c.fillRect(x, y, w, h); };
-  if (kind === 'lien' || kind === 'loren' || kind === 'elder' || kind === 'merchant' || kind === 'child') {
+  if (kind === 'lien' || kind === 'loren' || kind === 'elder' || kind === 'merchant' || kind === 'child' || npcCoats[kind]) {
     const mage = kind === 'lien'; const elder = kind === 'elder'; const knight = kind === 'loren';
-    const coat = mage ? '#427d89' : knight ? '#b4b7bc' : elder ? '#8b7399' : kind === 'child' ? '#d6a05d' : '#69837d';
+    const coat = npcCoats[kind] ?? (mage ? '#427d89' : knight ? '#b4b7bc' : elder ? '#8b7399' : kind === 'child' ? '#d6a05d' : '#69837d');
     const trim = mage ? '#e9c28a' : knight ? '#718b99' : '#d9bb8a';
     const bob = frame % 2; const step = frame === 1 ? 2 : frame === 3 ? -2 : 0;
     rect(9, 31, 5, 7 - Math.max(0, step), '#393e43'); rect(18, 31, 5, 7 + Math.min(0, step), '#393e43');
@@ -56,14 +92,21 @@ export function pixelTexture(kind: string, frame = 0, direction = 0): THREE.Canv
     if (e.shape === 'wisp') { rect(11, 10, 13, 23, color); rect(6, 17, 23, 10, color); rect(16, 3, 5, 9, color); rect(13, 18, 9, 9, '#eaffff'); rect(13, 33, 5, 4, color); }
     if (e.shape === 'knight') { rect(8, 15, 17, 20, color); rect(9, 4, 15, 12, '#687782'); rect(12, 9, 12, 3, '#f7d49b'); rect(5, 17, 7, 10, '#c1b9a0'); rect(24, 14, 3, 22, '#e3dfca'); rect(21, 28, 9, 3, '#b49666'); rect(9, 33, 6, 6, '#4f5663'); rect(20, 33, 6, 6, '#4f5663'); rect(11, 0, 10, 4, '#b9b2aa'); }
   }
-  const t = new THREE.CanvasTexture(canvas); t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.colorSpace = THREE.SRGBColorSpace; return t;
+  return nearestTexture(canvas);
+}
+
+function nearestTexture(canvas: HTMLCanvasElement) {
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.magFilter = texture.minFilter = THREE.NearestFilter;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 export class World {
   renderer: THREE.WebGLRenderer; scene = new THREE.Scene(); camera: THREE.OrthographicCamera; composer: EffectComposer; bloom: UnrealBloomPass; bokeh: BokehPass;
   root = new THREE.Group(); actorRoot = new THREE.Group(); obstacles: Obstacle[] = []; mapRoads: Obstacle[] = []; mapWater: Obstacle[] = []; private highlightRing?: THREE.Mesh; sprites = new Map<string, THREE.Sprite>();
   player!: THREE.Sprite; companion!: THREE.Sprite; particles!: THREE.Points; water: THREE.Mesh[] = []; lamps = new Map<string, THREE.Group>();
-  clock = new THREE.Clock(); private zone: ZoneId = 'village'; private battle = false; private tex = new Map<string, THREE.CanvasTexture>(); private materials = new Map<string, THREE.MeshStandardMaterial>();
+  clock = new THREE.Clock(); private objects: Interactable[] = []; private battle = false; private tex = new Map<string, THREE.CanvasTexture>(); private materials = new Map<string, THREE.MeshStandardMaterial>();
   private combatFx: { sprite: THREE.Sprite; start: number; effect: CombatEffect; phase: 'cast' | 'impact'; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
   private noise?: THREE.CanvasTexture; private effects: { sprite: THREE.Sprite; start: number; y: number }[] = [];
   private target = new THREE.Vector3(); private cameraFocus = new THREE.Vector3(); private quality: 'high' | 'low' = 'high'; private reduced = false;
@@ -129,9 +172,9 @@ export class World {
     }
     this.obstacles.push({ x, z, w: 0.8 * size, d: 0.8 * size });
   }
-  private house(x: number, z: number, w: number, d: number, color: number, roofColor: number, tall = false) {
-    const h = tall ? 4 : 2.8; const g = new THREE.Group(); g.position.set(x, 0, z); this.root.add(g);
-    g.userData.building = '霧鐘村民宅';
+  private house(x: number, z: number, w: number, d: number, color: number, roofColor: number, label = '霧鐘村民宅') {
+    const h = 2.8; const g = new THREE.Group(); g.position.set(x, 0, z); this.root.add(g);
+    g.userData.building = label;
     this.box(0, 0.22, 0, w + 0.4, 0.4, d + 0.4, 0x69756d, g); this.box(0, h / 2 + 0.3, 0, w, h, d, color, g);
     for (const dx of [-w / 2 + 0.12, w / 2 - 0.12]) { this.box(dx, h / 2 + 0.35, d / 2 + 0.04, 0.17, h, 0.16, 0x655c4c, g); this.box(dx, h / 2 + 0.35, -d / 2, 0.17, h, 0.16, 0x655c4c, g); }
     this.box(0, h - 0.2, d / 2 + 0.04, w, 0.16, 0.12, 0x655c4c, g);
@@ -175,14 +218,15 @@ export class World {
       part.userData.building = '鐘塔';
     }
   }
-  build(state: GameState) {
-    this.disposeGroup(this.root); this.disposeGroup(this.actorRoot); this.sprites.clear(); this.effects.forEach(e => { e.sprite.material.map?.dispose(); e.sprite.material.dispose(); }); this.effects = []; this.combatFx = []; this.obstacles = []; this.mapRoads = [{x:0,z:0,w:2.8,d:22},{x:0,z:1.8,w:22,d:2.8}]; this.mapWater = []; this.water = []; this.lamps.clear(); this.zone = state.zone; this.battle = false; this.beams = []; this.gate = undefined;
+  build(state: GameState, keepCamera = false) {
+    this.disposeGroup(this.root); this.disposeGroup(this.actorRoot); this.sprites.clear(); this.effects.forEach(e => { e.sprite.material.map?.dispose(); e.sprite.material.dispose(); }); this.effects = []; this.combatFx = []; this.obstacles = []; this.mapRoads = [{x:0,z:0,w:2.8,d:22},{x:0,z:1.8,w:22,d:2.8}]; this.mapWater = []; this.water = []; this.lamps.clear(); this.objects = areaObjects(state); this.battle = false; this.beams = []; this.gate = undefined;
     const rng = seeded(ZONE_ORDER_INDEX[state.zone] * 77 + 50); const zone = state.zone;
-    const colors = { village: '#334f51', forest: '#203f40', waterway: '#2c4857', tower: '#343f57' };
+    const colors = { village: '#334f51', forest: '#203f40', waterway: '#2c4857', tower: '#343f57', station: '#51434c', highland: '#395269', archive: '#494959', corridor: '#352e54' };
+    const grounds: Partial<Record<ZoneId, number>> = { tower: 0x7a8381, waterway: 0x5a7872, station: 0x82736a, highland: 0x6c8284, archive: 0x8c8588, corridor: 0x4d4b6b };
     this.scene.background = new THREE.Color(colors[zone]); this.scene.fog = new THREE.FogExp2(colors[zone], 0.012);
     this.sun.color.set(zone === 'tower' ? 0xc3bcf0 : 0xffd8a0);
     this.box(0, -0.75, 0, 32, 1.4, 26, zone === 'tower' ? 0x646d70 : palette.dark);
-    this.box(0, -0.12, 0, 32.1, 0.25, 26.1, zone === 'tower' ? 0x7a8381 : zone === 'waterway' ? 0x5a7872 : palette.grass);
+    this.box(0, -0.12, 0, 32.1, 0.25, 26.1, grounds[zone] ?? palette.grass);
     for (let i = 0; i < 45; i++) {
       const x = (rng() - 0.5) * 34; const z = (rng() - 0.5) * 28;
       if (Math.abs(x) < 13 && Math.abs(z) < 11) continue;
@@ -206,12 +250,19 @@ export class World {
       this.lamp(oldLantern.x, oldLantern.z, oldLantern.id);
       for (const [x, z] of [[4, 5], [-3, -5], [3, -5], [-10, 4]]) this.lamp(x, z, `street-${x}-${z}`);
       this.sprite('elder', -3, 2, 'elder'); this.sprite('merchant', 7, 4, 'merchant'); this.sprite('child', -7, 7, 'child', 0.85);
+      if (state.flags.includes('C6-04')) this.lamp(5, 0, 'village-public-light', true);
       for (let j = 0; j < 5; j++) { this.box(-3.8, 0.4, -7 + j * 1.5, 0.13, 0.85, 0.13, 0x8c8f71); this.box(-3.8, 0.5, -6.4 + j * 1.5, 0.1, 0.1, 1.5, 0x9c9a7b); }
     } else if (zone === 'forest') {
       this.river(0, -9.2, 32, 2.6); this.bridge(0, -9.2, 3.2, 3.1);
+      const storySpots = [[-2,-6], ...MEDIUM_NOTES.filter(([, area]) => area === zone).map(([, , x, z]) => [x, z]),
+        ...MEDIUM_TALKS.filter(([, area]) => area === zone).map(([, , x, z]) => [x, z]),
+        ...MEDIUM_QUESTS.flatMap(quest => quest.stops).filter(stop => stop.zone === zone).map(({ point }) => [point.x, point.z])];
       for (let i = 0; i < 47; i++) { const x = (rng() - 0.5) * 30; const z = (rng() - 0.5) * 24;
         if (Math.abs(x) < 3 || (z > 0 && z < 4) || ZONES[zone].objects.some(o => Math.hypot(o.x - x, o.z - z) < 2.2) || ZONES[zone].encounters.some(e => Math.hypot(e.x - x, e.z - z) < 1.5)) continue;
-        this.tree(x, z, 0.85 + rng() * 0.55, rng, i % 3 === 0);
+        const keepClear = isMedium(state) && storySpots.some(([px, pz]) => Math.hypot(px - x, pz - z) < 1.6);
+        const size = 0.85 + rng() * 0.55;
+        if (keepClear) continue;
+        this.tree(x, z, size, rng, i % 3 === 0);
       }
       for (const [x, z] of [[-11, -7], [11, -8], [-12, 7]]) { this.cylinder(x, 0.7, z, 0.45, 1.4, 0x745d4a); const mush = new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), this.material(0x87b1b3, true)); mush.position.set(x, 1.4, z); this.root.add(mush); }
     } else if (zone === 'waterway') {
@@ -220,11 +271,13 @@ export class World {
       }
       for (const x of [-12, 12]) for (const z of [-8, -2, 5]) { this.cylinder(x, 2, z, 0.55, 4, 0x91a59c); this.box(x, 4.1, z, 1.5, 0.4, 1.5, 0xa5b1a2); this.obstacles.push({ x, z, w: 1.2, d: 1.2 }); }
       for (const x of [-9, 9]) { this.box(x, 4.9, -8.5, 4.6, 0.65, 1, 0x9ca99a); this.box(x - 2, 2.6, -8.5, 0.8, 5, 1, 0x82998d); this.box(x + 2, 2.6, -8.5, 0.8, 5, 1, 0x82998d); }
-    } else {
+    } else if (zone === 'tower') {
       for (const x of [-12, 12]) for (const z of [-8, 0, 8]) { this.cylinder(x, 2.2, z, 0.65, 4.4, 0x919b9b); this.cylinder(x, 4.5, z, 0.9, 0.3, 0xb6b7a4); this.lamp(x, z, `spire-${x}-${z}`, true); this.obstacles.push({ x, z, w: 1.5, d: 1.5 }); }
       this.tower(7, -9, 9); this.cylinder(0, 0.15, -7, 3.5, 0.3, 0x969c98, 12);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.035, 6, 48), this.material(0xe6ce91, true)); ring.rotation.x = Math.PI / 2; ring.position.set(0, 0.34, -7); this.root.add(ring);
       for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; this.box(Math.cos(a) * 2.9, 0.35, -7 + Math.sin(a) * 2.9, 0.12, 0.05, 0.3, 0xe1ca94, this.root, true); }
+    } else {
+      this.outerLandmarks(zone, state);
     }
     // Distant floating ridgelines and the moon form a continuous backdrop beyond the diorama.
     for (let i = 0; i < 24; i++) { const a = i / 24 * Math.PI * 2; const r = 46 + rng() * 15; const mountain = new THREE.Mesh(new THREE.ConeGeometry(8 + rng() * 9, 10 + rng() * 18, 5), this.material(i % 2 ? 0x39585a : 0x426162)); mountain.position.set(Math.cos(a) * r, -10, Math.sin(a) * r); this.root.add(mountain); }
@@ -247,10 +300,16 @@ export class World {
       for (let i = -3; i <= 3; i++) this.box(i * 0.48, 1.7, -9.8, 0.06, 3, 0.06, 0x8fdbd4, this.gate, true);
     }
     this.addGrass(rng, zone);
-    for (const o of ZONES[zone].objects) {
+    for (const o of this.objects) {
       const start = this.root.children.length;
       if (o.kind === 'lore') { this.box(o.x, 0.45, o.z, 0.72, 0.9, 0.32, 0x939b87); this.box(o.x, 0.96, o.z, 0.82, 0.12, 0.42, 0xbbbd9e); for (let line = 0; line < 3; line++) this.box(o.x, 0.7 - line * 0.14, o.z + 0.17, 0.4 - line * 0.08, 0.025, 0.015, 0xd9ca98, this.root, true); }
       if (o.kind === 'lamp') this.lamp(o.x, o.z, o.id, true);
+      if (o.kind === 'npc' && npcCoats[o.id]) this.sprite(o.id, o.x, o.z, o.id);
+      if (o.kind === 'story') {
+        const optional = o.id.startsWith('sq') || o.id.startsWith('H');
+        this.cylinder(o.x, 0.22, o.z, optional ? 0.27 : 0.56, 0.44, 0x69706e);
+        this.box(o.x, 0.51, o.z, optional ? 0.36 : 0.72, 0.12, optional ? 0.34 : 0.52, optional ? 0xb3d6cd : 0xe5c68e, this.root, true);
+      }
       if (o.kind === 'mechanism') {
         if (o.id.startsWith('beacon')) this.lamp(o.x, o.z, o.id);
         else { this.cylinder(o.x, 0.3, o.z, 0.7, 0.6, 0x929f92); const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.1, 6, 12), this.material(0xd8bb7e)); wheel.rotation.x = -Math.PI / 2; wheel.position.set(o.x, 0.8, o.z); this.root.add(wheel); const g = new THREE.Group(); g.position.set(o.x, 0, o.z); this.root.add(g); this.lamps.set(o.id, g); this.box(0, 0.8, 0, 0.9, 0.1, 0.12, 0xaec5be, g); }
@@ -272,7 +331,46 @@ export class World {
       }
     }
     this.highlightRing = new THREE.Mesh(new THREE.RingGeometry(0.62,0.72,32),new THREE.MeshBasicMaterial({color:0xffdd95,transparent:true,opacity:0.8,side:THREE.DoubleSide,depthWrite:false})); this.highlightRing.rotation.x=-Math.PI/2; this.highlightRing.visible=false; this.root.add(this.highlightRing);
-    this.addParticles(rng); this.sync(state); this.cameraFocus.set(0, 0, 0);
+    this.addParticles(rng); this.sync(state);
+    if (!keepCamera) this.cameraFocus.set(0, 0, 0);
+  }
+  private outerLandmarks(zone: ZoneId, state: GameState) {
+    if (zone === 'station') {
+      for (const x of [10.5, 12]) this.box(x, 0.15, 0, 0.12, 0.1, 24, 0x9b9b99);
+      for (let z = -11; z < 12; z++) this.box(11.25, 0.06, z, 2.3, 0.12, 0.26, 0x5d4742);
+      this.house(-10, -1, 4, 5, 0xb79d8b, 0x6c5559, '灰港驛站候車室');
+      this.box(11.25, 1.45, -6, 2.15, 2.5, 5.1, 0x82504d);
+      this.box(11.25, 2.77, -6, 2.38, 0.34, 5.3, 0x5e5559);
+      this.obstacles.push({x:11.25,z:-6,w:2.2,d:5.1});
+      const open = state.flags.includes('C3-05');
+      for (let z = -7.6; z <= -4.4; z += 1.1) this.box(10.14, 1.9, z, 0.05, 0.46, 0.55, open ? 0xffcf82 : 0x777882, this.root, open);
+    } else if (zone === 'highland') {
+      this.house(-10, 7.8, 4.2, 3.5, 0xa19583, 0x667f90, '風鳴高地修聲棚');
+      for (const [x, z] of [[-11,-6], [11,-5], [7,-8]]) {
+        this.cylinder(x, 1.95, z, 0.34, 3.9, 0xadb5ad);
+        this.box(x + 0.7, 3.65, z, 1.5, 0.14, 0.17, 0x8b7363);
+        const vane = this.box(x + 1.03, 3.36, z, 0.54, 0.5, 0.13, 0x7ac3bf);
+        vane.rotation.z = 0.37;
+        this.obstacles.push({x,z,w:0.8,d:0.8});
+      }
+      const testing = state.flags.includes('C4-05') && !state.flags.includes('C4-06');
+      this.cylinder(5, 0.17, -5, 1.6, 0.34, 0x86938d);
+      this.box(5, 1.25, -5, 0.14, 1.6, 0.14, testing ? 0xe88b70 : 0x83bab7, this.root, true);
+    } else if (zone === 'archive') {
+      for (const x of [-10.6, 10.6]) for (const z of [-7, -2, 3]) {
+        this.box(x, 1.55, z, 1.25, 3.1, 2.9, 0xaa9e88);
+        for (let i = 0; i < 3; i++) for (const side of [-1, 1]) this.box(x - Math.sign(x) * 0.65, 0.75 + i * 0.78, z + side * 0.64, 0.08, 0.46, 1.12, 0x675968);
+        this.obstacles.push({x,z,w:1.25,d:2.9});
+      }
+      this.lamp(5, -6, 'archive-desk-light', state.flags.includes('C5-05'));
+    } else {
+      for (const z of [-8, -2, 4, 9]) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(3.15, 0.12, 6, 28, Math.PI), this.material(0x9e8eb3, true));
+        ring.position.set(0, 1.6, z); this.root.add(ring);
+        for (const x of [-3.15, 3.15]) this.cylinder(x, 0.8, z, 0.18, 1.6, 0x8d7d9f);
+      }
+      for (const sign of [-1, 1]) for (let z = -8; z <= 8; z += 2) this.box(sign * 9.5, 0.16, z, 0.6, 0.3, 1.45, 0x8d7ba4);
+    }
   }
   private addGrass(rng: () => number, zone: ZoneId) {
     const count = zone === 'tower' ? 180 : 1300; const geo = new THREE.ConeGeometry(0.08, 0.35, 3); const mat = this.material(zone === 'waterway' ? 0x85a691 : 0x8caa77);
@@ -289,7 +387,10 @@ export class World {
   }
   sync(state: GameState) {
     if (state.flags.includes('ending')) { this.scene.background = new THREE.Color('#748f8c'); this.scene.fog = new THREE.FogExp2('#748f8c', 0.012); this.sun.color.set(0xffdc9b); }
-    if (this.gate) this.gate.visible = !puzzleSolved(state);
+    if (this.gate) {
+      const exit = ZONES[state.zone].objects.find(o => o.kind === 'exit');
+      this.gate.visible = isMedium(state) && state.zone !== 'tower' && exit ? !mediumDestination(state, exit.id) : !puzzleSolved(state);
+    }
     this.beams.forEach(b => { b.mesh.visible = state.mechanisms[b.id] === b.value; });
     if (state.zone === 'waterway') this.water.forEach((w, i) => { w.position.y = state.mechanisms[`valve-${i + 1}`] ? -0.18 : -0.02; });
     for (const [id, g] of this.lamps) {
@@ -312,7 +413,7 @@ export class World {
   }
   highlight(id: string | undefined) {
     if (!this.highlightRing) return;
-    const object = ZONES[this.zone].objects.find(o => o.id === id); this.highlightRing.visible = !!object;
+    const object = this.objects.find(o => o.id === id); this.highlightRing.visible = !!object;
     if (object) this.highlightRing.position.set(object.x,0.14,object.z);
   }
   configure(quality: 'high' | 'low', reduced: boolean) {
@@ -424,7 +525,13 @@ export class World {
     const t = this.clock.getElapsedTime(); this.bokeh.enabled = ['title', 'ending'].includes(mode) && !this.reduced; const dt = Math.min(0.05, t - this.lastTime); this.lastTime = t;
     if (!this.battle && this.player) {
       this.player.position.set(state.position.x, 0.98 + (!this.reduced && moving ? Math.sin(t * 14) * 0.035 : 0), state.position.z);
-      if (moving) { this.direction = Math.abs(dx) > Math.abs(dz) ? dx > 0 ? 1 : 3 : dz < 0 ? 2 : 0; }
+      if (moving) {
+        const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+        const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+        const horizontal = dx * right.x + dz * right.z;
+        const vertical = dx * up.x + dz * up.z;
+        this.direction = Math.abs(horizontal) > Math.abs(vertical) ? horizontal > 0 ? 1 : 3 : vertical > 0 ? 2 : 0;
+      }
       const frame = moving && !this.reduced ? Math.floor(t * 8) % 4 : 0;
       this.player.material.map = this.texture(state.leaderId, frame, this.direction);
       const desired = new THREE.Vector3(state.position.x + 0.8, 0.98, state.position.z + 0.9); this.companion.position.lerp(desired, 1 - Math.exp(-dt * 5));
@@ -440,7 +547,9 @@ export class World {
         s.position.copy(attack.origin);
         if (attack.effect === 'slash') { const direction = attack.destination.clone().sub(attack.origin); direction.y = 0; s.position.addScaledVector(direction.normalize(), arc * 0.9); s.material.rotation = arc * -0.14; }
         else s.position.y += arc * 0.18;
-        s.material.map = this.texture(s.userData.kind, p < 0.8 ? 4 : 0, 1);
+        const side = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+        const facing = side.dot(attack.destination.clone().sub(attack.origin)) < 0 ? 3 : 1;
+        s.material.map = this.texture(s.userData.kind, p < 0.8 ? 4 : 0, facing);
         if (p >= 1) { s.position.copy(attack.origin); s.material.rotation = 0; s.material.map = this.texture(s.userData.kind, s.userData.charging ? 2 : 0); delete s.userData.attack; }
       }
       const hit = s.userData.hit;
@@ -497,4 +606,4 @@ export class World {
   private disposeGroup(g: THREE.Group) { g.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.Points) o.geometry.dispose(); if (o instanceof THREE.Sprite) o.material.dispose();
       if (o instanceof THREE.Mesh && !Array.isArray(o.material) && ![...this.materials.values()].includes(o.material as THREE.MeshStandardMaterial)) o.material.dispose(); if (o instanceof THREE.Points) (o.material as THREE.Material).dispose(); }); g.clear(); }
 }
-const ZONE_ORDER_INDEX: Record<ZoneId, number> = { village: 0, forest: 1, waterway: 2, tower: 3 };
+const ZONE_ORDER_INDEX: Record<ZoneId, number> = { village: 0, forest: 1, waterway: 2, tower: 3, station: 4, highland: 5, archive: 6, corridor: 7 };

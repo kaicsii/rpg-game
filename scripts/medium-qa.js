@@ -1,0 +1,173 @@
+async (page) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const read = () => page.evaluate(() => window.__starlight.getState());
+  const mode = () => page.evaluate(() => window.__starlight.getMode());
+  const skip = async () => {
+    if (await page.locator('.dialogue-panel').count()) await page.keyboard.press('Escape');
+  };
+  const approach = async (id, combat = false) => {
+    const reached = await page.evaluate(async ({ id, combat }) => {
+      const { areaObjects, closestObject } = await import('/src/game.ts');
+      const { ALL_ZONES } = await import('/src/data.ts');
+      const game = window.__starlight;
+      const state = game.getState();
+      const target = (combat ? ALL_ZONES[state.zone].encounters : areaObjects(state)).find(o => o.id === id);
+      if (!target) return false;
+      const queue = [[0, 8.5]];
+      const seen = new Set();
+      for (let i = 0; i < queue.length; i++) {
+        const [x, z] = queue[i];
+        const key = `${x},${z}`;
+        if (seen.has(key) || !game.canWalk(x, z)) continue;
+        seen.add(key);
+        state.position = { x, z };
+        if (combat ? Math.hypot(x - target.x, z - target.z) < .9 : closestObject(state)?.id === id) {
+          game.moveTo(x, z);
+          return true;
+        }
+        queue.push([x + .5, z], [x - .5, z], [x, z + .5], [x, z - .5]);
+      }
+      return false;
+    }, { id, combat });
+    check(reached, `No reachable position for ${id}`);
+  };
+  const interact = async (id, finish = true) => {
+    await approach(id);
+    await page.keyboard.press('e');
+    if (finish) await skip();
+  };
+  const fight = async (id, lamp) => {
+    await interact(lamp);
+    await approach(id, true);
+    await page.waitForSelector('.dialogue-panel');
+    check(await mode() === 'dialogue', `No battle scene for ${id}`);
+    await skip();
+    await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
+    let phases = 0;
+    for (let turns = 0; turns < 100; turns++) {
+      const status = await page.evaluate(async () => {
+        const game = window.__starlight;
+        const battle = game.getBattle();
+        if (battle.status !== 'active') return battle.status;
+        const { SKILLS } = await import('/src/data.ts');
+        const { partyLevel } = await import('/src/game.ts');
+        const hero = battle.heroes.find(hero => hero.id === battle.order[battle.cursor]);
+        const enemy = battle.enemies.find(enemy => enemy.hp > 0);
+        const dead = battle.heroes.find(hero => hero.hp <= 0);
+        const hurt = battle.heroes.find(hero => hero.hp > 0 && hero.hp < hero.maxHp * .44);
+        const skill = SKILLS.find(skill => skill.owner === hero.id && skill.element === enemy.weakness &&
+          skill.level <= partyLevel(game.getState()) && skill.cost <= hero.mp && skill.power > 0);
+        const action = dead && battle.inventory.revive ? { kind: 'item', id: 'revive', target: dead.id }
+          : hurt && battle.inventory.potion ? { kind: 'item', id: 'potion', target: hurt.id }
+          : battle.resonance === 100 && !dead ? { kind: 'resonance' }
+          : skill ? { kind: 'skill', id: skill.id, target: enemy.id } : { kind: 'attack', target: enemy.id };
+        void game.action(action);
+        return battle.status;
+      });
+      if (status === 'victory') {
+        await page.locator('[data-action="battle:end"]').click();
+        await skip();
+        return { id, turns, phases };
+      }
+      check(status === 'active', `${id} ended with ${status}`);
+      await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
+      if (await page.locator('.dialogue-panel').count()) {
+        phases++;
+        await skip();
+        await page.waitForSelector('.dialogue-panel', { state: 'hidden' });
+        await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
+      }
+    }
+    throw new Error(`Battle failed to finish: ${id}`);
+  };
+  const go = async zone => {
+    if ((await read()).zone === zone) return;
+    await page.keyboard.press('m');
+    await page.locator(`[data-action="travel:${zone}"]`).click();
+    check((await read()).zone === zone, `Travel failed: ${zone}`);
+  };
+  const reload = async () => {
+    await page.reload();
+    await page.getByRole('button', { name: '繼續旅程', exact: true }).click();
+    await page.locator('.save-slot').first().getByRole('button', { name: '讀取記錄' }).click();
+  };
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('http://localhost:5173');
+  await page.keyboard.press('Escape');
+  await page.getByRole('switch', { name: '減少動態效果' }).click();
+  await page.getByRole('button', { name: '輕盈', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '開始中篇' }).click();
+  await skip();
+  check((await read()).flags.includes('P00'), 'Opening is saved');
+  const chapters = await page.evaluate(async () => (await import('/src/medium-content.ts')).MEDIUM_CHAPTERS);
+  const battles = [];
+  for (const chapter of chapters) {
+    check((await read()).zone === chapter.zone, `Wrong region for ${chapter.title}`);
+    if (chapter.zone === 'station') {
+      await page.waitForSelector('#area-announcement.visible', { state: 'hidden' });
+      await page.screenshot({ path: 'output/playwright/medium-station-720.png' });
+    }
+    for (const step of chapter.groups.flat()) {
+      if (step.target === 'opening' || step.scene === 'C8-04') continue;
+      if (step.battle) battles.push(await fight(step.target, `${chapter.zone}-lamp`));
+      else if (step.target.startsWith('dial')) {
+        const value = [2, 1, 3][Number(step.target.at(-1)) - 1];
+        for (let i = 0; i < value; i++) await interact(step.target);
+      } else if (step.scene === 'C7-02') {
+        await interact(step.target, false);
+        for (let i = 0; i < 4; i++) await page.keyboard.press('e');
+        await page.getByRole('button', { name: '問回音還記得什麼' }).click();
+        check((await page.locator('.dialogue-body > p').textContent()).includes('昨天'), 'Choice changes dialogue');
+        await skip();
+      } else await interact(step.target);
+      const flag = step.part ? `${step.scene}:${step.part}` : step.scene;
+      check((await read()).flags.includes(flag), `Missing progression flag ${flag}`);
+    }
+    if (chapter.zone === 'highland') await interact(chapter.exit);
+    if (chapter.zone === 'station') {
+      await reload();
+      check((await read()).flags.includes('C3-06'), 'New-region auto save survives reload');
+    }
+  }
+  check(battles.length === 8 && battles.at(-1).phases === 1, 'Eight required encounters and the second-stage dialogue');
+  check(await mode() === 'ending', 'Reached ending');
+  for (let i = 1; i <= 6; i++) {
+    await page.locator('[data-action="epilogue"]').click();
+    await skip();
+    check((await read()).flags.includes(`E0${i}`), `Missing epilogue scene ${i}`);
+    if (i === 3) { await reload(); check(await mode() === 'ending', 'Resume in the epilogue'); }
+  }
+  await page.getByRole('button', { name: '回到星光下' }).click();
+  const { quests, notes, talks } = await page.evaluate(async () => {
+    const { MEDIUM_QUESTS, MEDIUM_NOTES, MEDIUM_TALKS } = await import('/src/medium-content.ts');
+    const { ZONES } = await import('/src/data.ts');
+    const oldNotes = Object.values(ZONES).flatMap(zone => zone.objects.filter(o => o.kind === 'lore').map(o => [o.id, zone.id]));
+    return { quests: MEDIUM_QUESTS, notes: [...MEDIUM_NOTES, ...oldNotes], talks: MEDIUM_TALKS };
+  });
+  await go('waterway');
+  await interact('waterway-boat');
+  await interact('pendant');
+  await go('forest');
+  for (const id of ['herb-1', 'herb-2', 'herb-3']) await interact(id);
+  await go('village');
+  await interact('elder');
+  await interact('child');
+  check((await read()).flags.includes('herb-reward') && (await read()).flags.includes('pendant-reward'), 'Short quests work in the medium campaign');
+  for (const quest of quests) {
+    for (const stop of quest.stops) { await go(stop.zone); await interact(stop.point.id); }
+    check((await read()).flags.includes(quest.id), `Quest not completed: ${quest.id}`);
+  }
+  for (const [id, zone] of [...notes, ...talks]) {
+    await go(zone); await interact(id);
+    check((await read()).flags.includes(id), `Could not read ${id}`);
+  }
+  await page.keyboard.press('j');
+  check((await page.locator('.chapter-card .eyebrow').textContent()).includes('54 / 54'), 'Journal shows all scenes');
+  await page.setViewportSize({ width: 390, height: 844 });
+  check(await page.getByRole('dialog', { name: '旅途日誌' }).isVisible(), 'Journal works in a narrow layout');
+  check(errors.length === 0, errors.join('; '));
+  return { battles, scenes: 54, epilogue: 6, completedQuests: quests.length + 2, readNotes: notes.length, talks: talks.length };
+}

@@ -1,5 +1,6 @@
-import { ZONES, ENEMIES, type GameState } from './data';
+import { ALL_ZONES as ZONES, ENEMIES, type GameState } from './data';
 import { getObjective, visibleMapObjects, has } from './game';
+import { isMedium } from './medium';
 import type { World, Obstacle } from './world';
 const cache = new WeakMap<World, Map<string,string>>();
 const escape = (s: string) => s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
@@ -12,10 +13,11 @@ export function mapPoints(state: GameState) {
 }
 export function mapView(state: GameState, world: World) {
   let zones = cache.get(world); if (!zones) { zones=new Map(); cache.set(world,zones); }
-  let base=zones.get(state.zone);
+  const layout = `${state.zone}:${isMedium(state)}`;
+  let base=zones.get(layout);
   if (!base) {
     const rect=(r:Obstacle,color:string)=>`<rect x="${r.x-r.w/2}" y="${r.z-r.d/2}" width="${r.w}" height="${r.d}" fill="${color}"/>`;
-    base='<rect x="-16" y="-13" width="32" height="26" rx="0.5" fill="#335b54"/>'+world.mapWater.map(r=>rect(r,'#416e83')).join('')+world.mapRoads.map(r=>rect(r,'#a19f77')).join('')+world.obstacles.map(r=>rect(r,'#193d3e')).join(''); zones.set(state.zone,base);
+    base='<rect x="-16" y="-13" width="32" height="26" rx="0.5" fill="#335b54"/>'+world.mapWater.map(r=>rect(r,'#416e83')).join('')+world.mapRoads.map(r=>rect(r,'#a19f77')).join('')+world.obstacles.map(r=>rect(r,'#193d3e')).join(''); zones.set(layout,base);
   }
   const targets=getObjective(state).targetIds;
   const markers=mapPoints(state).map(o=>{

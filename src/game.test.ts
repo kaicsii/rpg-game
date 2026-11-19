@@ -1,9 +1,72 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ZONES, SKILLS, type GameState, type Encounter } from './data';
-import { newGame, levelFor, heroStats, damage, startBattle, resolveAction, advanceEnemies, currentActor, finishBattle, grantFlag, bridgeClueFlag, completeBridgeQuest, revealedWeaknesses, enemyThreat, saveGame, loadGame, validSave, refreshStats, healParty, puzzleSolved, canLeave, travel, applyItem, type Battle, type Action } from './game';
+import { ZONES, ALL_ZONES, SKILLS, type GameState, type Encounter } from './data';
+import { newGame, levelFor, partyLevel, areaObjects, heroStats, damage, startBattle, resolveAction, advanceEnemies, currentActor, finishBattle, grantFlag, bridgeClueFlag, completeBridgeQuest, revealedWeaknesses, enemyThreat, saveGame, loadGame, validSave, refreshStats, healParty, puzzleSolved, canLeave, travel, applyItem, type Battle, type Action } from './game';
+import { MEDIUM_CHAPTERS, MEDIUM_QUESTS } from './medium-content';
+import { finishMediumAction, finishQuestStop, mediumDestination, mediumLines, mediumProgress, mediumSteps, unlockedRegions } from './medium';
 const fixture = (id: string): Encounter => Object.values(ZONES).flatMap(z => z.encounters).find(e => e.id === id)!;
 const ready = (xp = 160) => { const s = newGame(); s.xp = xp; refreshStats(s); healParty(s); return s; };
+
+test('中篇主線只靠必要戰鬥可通過全部區域，並保存新增的區域與記憶', () => {
+  let s = newGame();
+  s.flags.push('medium-campaign');
+  assert.deepEqual(unlockedRegions(s), ['village']);
+  const encounters = [];
+  for (const [index, chapter] of MEDIUM_CHAPTERS.entries()) {
+    assert.equal(s.zone, chapter.zone);
+    for (const group of chapter.groups) for (const step of [...group].reverse()) {
+      assert.ok(mediumSteps(s).includes(step), step.scene);
+      assert.ok(mediumLines(s, step).length, step.scene);
+      if (!step.battle && step.target !== 'opening') assert.ok(areaObjects(s).some(o => o.id === step.target), step.target);
+      if (step.battle && !s.defeated.includes(step.target)) {
+        const encounter = ALL_ZONES[s.zone].encounters.find(e => e.id === step.target);
+        assert.ok(encounter, step.target);
+        healParty(s);
+        const battle = autoplay(s, encounter);
+        assert.equal(battle.status, 'victory', encounter.id);
+        encounters.push(encounter.id);
+        s = finishBattle(s, battle);
+      }
+      if (step.target.startsWith('beacon')) s.xp += 4;
+      if (step.scene === 'C8-01' && mediumSteps(s).length === 1) s.xp += 24;
+      finishMediumAction(s, step);
+      refreshStats(s);
+    }
+    const next = MEDIUM_CHAPTERS[index + 1];
+    if (chapter.exit && next) {
+      assert.equal(mediumDestination(s, chapter.exit), next.zone);
+      assert.ok(unlockedRegions(s).includes(next.zone));
+      s.zone = next.zone;
+      s.checkpoint.zone = next.zone;
+    }
+  }
+  assert.equal(encounters.length, 8);
+  assert.equal(mediumProgress(s), 54);
+  assert.ok(s.flags.includes('ending'));
+  s.discoveredObjectIds.push('L24');
+  assert.equal(unlockedRegions(s).length, 8);
+  s.zone = 'archive'; s.checkpoint.zone = 'archive';
+  const saves = new Map<string, string>();
+  const storage = { getItem: (key: string) => saves.get(key) ?? null, setItem: (key: string, data: string) => { saves.set(key, data); } };
+  saveGame(storage, 'auto', s);
+  assert.deepEqual(loadGame(storage, 'auto').state, s);
+  assert.equal(validSave({ ...s, flags: [] }), false);
+});
+
+test('中篇跨區支線依序交付，獎勵只給一次', () => {
+  const s = newGame();
+  const quest = MEDIUM_QUESTS[0];
+  const [a, b, c] = quest.stops;
+  const potions = s.inventory.potion;
+  assert.equal(finishQuestStop(s, quest, a.point.id), false);
+  s.flags.push(...quest.needs);
+  assert.equal(finishQuestStop(s, quest, c.point.id), false);
+  assert.equal(finishQuestStop(s, quest, a.point.id), false);
+  assert.equal(finishQuestStop(s, quest, b.point.id), false);
+  assert.equal(finishQuestStop(s, quest, c.point.id), true);
+  assert.equal(finishQuestStop(s, quest, c.point.id), false);
+  assert.equal(s.inventory.potion, potions + 2);
+});
 
 test('damage is deterministic, defense reduces it, broken enemies take extra damage', () => {
   assert.equal(damage(20, 10), 14); assert.equal(damage(20, 10, 1, true), 22); assert.equal(damage(1, 100), 1);
@@ -92,10 +155,10 @@ function autoplay(s: GameState, encounter: Encounter): Battle {
     else if (hurt && hero.id === 'lien' && hero.mp >= 4) action = { kind: 'skill', id: 'heal', target: hurt.id };
     else if (b.resonance === 100 && !dead) action = { kind: 'resonance' };
     else {
-      const skill = SKILLS.find(k => k.owner === hero.id && k.level <= levelFor(s.xp) && k.element === e.weakness && k.cost <= hero.mp && k.power > 0);
+      const skill = SKILLS.find(k => k.owner === hero.id && k.level <= partyLevel(s) && k.element === e.weakness && k.cost <= hero.mp && k.power > 0);
       action = skill ? { kind: 'skill', id: skill.id, target: e.id } : { kind: 'attack', target: e.id };
     }
-    const r = resolveAction(b, action, levelFor(s.xp)); assert.equal(r.error, undefined); b = advanceEnemies(r.battle).battle;
+    const r = resolveAction(b, action, partyLevel(s)); assert.equal(r.error, undefined); b = advanceEnemies(r.battle).battle;
   }
   return b;
 }

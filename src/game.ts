@@ -1,5 +1,10 @@
-import { ENEMIES, SKILLS, ZONES, ZONE_ORDER, type GameState, type CombatEffect, type Hero, type ItemId, type Encounter, type Element, type HeroId, type ZoneId } from './data';
-export const levelFor = (xp: number) => [0, 20, 55, 100, 160].filter(n => xp >= n).length;
+import { ENEMIES, SKILLS, ALL_ZONES as ZONES, ZONE_ORDER, type GameState, type CombatEffect, type Hero, type ItemId, type Encounter, type Element, type HeroId, type ZoneId } from './data';
+import { MEDIUM_NOTES } from './medium-content';
+import { isMedium, mediumObjects, mediumObjective } from './medium';
+const shortRoute: readonly ZoneId[] = ZONE_ORDER;
+export const levelFor = (xp: number, medium = false) => (medium ? [0, 20, 55, 100, 160, 225, 300, 380, 470] : [0, 20, 55, 100, 160]).filter(n => xp >= n).length;
+export const partyLevel = (state: GameState) => levelFor(state.xp, isMedium(state));
+export const areaObjects = (state: GameState) => isMedium(state) ? mediumObjects(state) : ZONES[state.zone].objects;
 export function heroStats(id: HeroId, level: number, accessory: string | null = null, weapon = false): Hero {
   const mage = id === 'lien';
   const maxHp = (mage ? 92 : 125) + (level - 1) * 18 + (accessory === 'moon-charm' ? 25 : 0);
@@ -21,7 +26,8 @@ export function grantFlag(state: GameState, flag: string, reward?: (draft: GameS
 }
 export function refreshStats(state: GameState): void {
   state.party = state.party.map(h => {
-    const next = heroStats(h.id, levelFor(state.xp), h.accessory, has(state, 'weapon-upgrade'));
+    const next = heroStats(h.id, partyLevel(state), h.accessory, has(state, 'weapon-upgrade'));
+    if (h.id === 'loren' && has(state, 'workshop-upgrade')) next.atk += 3;
     next.hp = h.hp <= 0 ? 0 : Math.min(next.maxHp, h.hp + Math.max(0, next.maxHp - h.maxHp));
     next.mp = Math.min(next.maxMp, h.mp + Math.max(0, next.maxMp - h.maxMp));
     return next;
@@ -42,13 +48,14 @@ export function puzzleSolved(state: GameState, zone: ZoneId = state.zone): boole
   return has(state, 'main-quest');
 }
 export function getObjective(state: GameState): { text: string; targetIds: string[] } {
+  if (isMedium(state)) return mediumObjective(state);
   const result = (text: string, ...targetIds: string[]) => ({ text, targetIds });
   const exit = () => ZONES[state.zone].objects.find(o => o.kind === 'exit')!.id;
   const back = () => ZONES[state.zone].objects.find(o => o.kind === 'back')!.id;
   if (has(state, 'ending')) return result('黎明已至。回到村莊，與大家分享這段旅程。', ...(state.zone === 'village' ? [] : [back()]));
   if (!has(state, 'main-quest')) return result('與廣場上的守燈婆婆交談', state.zone === 'village' ? 'elder' : back());
   const destination = !state.defeated.includes('forest-elite') ? 'forest' : !state.defeated.includes('water-elite') ? 'waterway' : 'tower';
-  if (state.zone !== destination) return result(`前往${ZONES[destination].name}，繼續尋回星火`, ZONE_ORDER.indexOf(state.zone) < ZONE_ORDER.indexOf(destination) ? exit() : back());
+  if (state.zone !== destination) return result(`前往${ZONES[destination].name}，繼續尋回星火`, shortRoute.indexOf(state.zone) < shortRoute.indexOf(destination) ? exit() : back());
   if (state.zone === 'forest') {
     if (!puzzleSolved(state)) return result(`點亮林間路燈（${[1,2,3].filter(n => state.mechanisms[`beacon-${n}`]).length} / 3）`, ...[1,2,3].filter(n => !state.mechanisms[`beacon-${n}`]).map(n => `beacon-${n}`));
     return result('擊敗古橋守木，取得第一縷星火', 'forest-elite');
@@ -63,15 +70,15 @@ export function getObjective(state: GameState): { text: string; targetIds: strin
 }
 export const objective = (state: GameState) => getObjective(state).text;
 export function discoverNearby(state: GameState): boolean {
-  const added = ZONES[state.zone].objects.filter(o => ['chest','herb','memory','lore','clue'].includes(o.kind) && !state.discoveredObjectIds.includes(o.id) && Math.hypot(o.x-state.position.x,o.z-state.position.z) <= 4).map(o => o.id);
+  const added = areaObjects(state).filter(o => ['chest','herb','memory','lore','clue'].includes(o.kind) && !state.discoveredObjectIds.includes(o.id) && Math.hypot(o.x-state.position.x,o.z-state.position.z) <= 4).map(o => o.id);
   state.discoveredObjectIds.push(...added); return added.length > 0;
 }
 export function visibleMapObjects(state: GameState) {
   const targets = getObjective(state).targetIds;
-  return availableObjects(state).filter(o => ['exit','back','lamp','npc'].includes(o.kind) || targets.includes(o.id) || state.discoveredObjectIds.includes(o.id));
+  return availableObjects(state).filter(o => ['exit','back','lamp','npc'].includes(o.kind) || o.id.startsWith('sq') || o.id.startsWith('H') || targets.includes(o.id) || state.discoveredObjectIds.includes(o.id));
 }
 function availableObjects(state: GameState) {
-  return ZONES[state.zone].objects.filter(o => !(['chest','herb','memory'].includes(o.kind) && has(state,o.id)));
+  return areaObjects(state).filter(o => !(['chest','herb','memory'].includes(o.kind) && has(state,o.id)));
 }
 function objectsByDistance(state: GameState) {
   return availableObjects(state).map(object => ({ object, distance: Math.hypot(object.x - state.position.x, object.z - state.position.z) })).sort((a, b) => a.distance - b.distance);
@@ -80,7 +87,7 @@ export function explorationMarkers(state: GameState, nearest: ReturnType<typeof 
   const mainTargets = getObjective(state).targetIds;
   return objectsByDistance(state)
     .map(({ object, distance }) => ({ object, distance, active: object.id === nearest?.id, main: mainTargets.includes(object.id) }))
-    .filter(({ object, distance, active, main }) => active || main || (distance <= 8 && (['npc', 'lamp'].includes(object.kind) || state.discoveredObjectIds.includes(object.id))))
+    .filter(({ object, distance, active, main }) => active || main || (distance <= 8 && (['npc', 'lamp'].includes(object.kind) || object.id.startsWith('sq') || object.id.startsWith('H') || state.discoveredObjectIds.includes(object.id))))
     .sort((a, b) => Number(b.active) - Number(a.active) || Number(b.main) - Number(a.main));
 }
 export const isHeavyRound = (round: number) => round % 3 === 0;
@@ -111,11 +118,12 @@ export function combatStatuses(battle: Battle, id: string): string[] {
 }
 export function canLeave(state: GameState): string | null {
   if (!puzzleSolved(state)) return state.zone === 'village' ? '先和守燈婆婆談談，再出發吧。' : '還有未完成的機關。任務日誌裡有線索。';
-  const gate = { village: '', forest: 'forest-elite', waterway: 'water-elite', tower: 'eclipse' }[state.zone];
+  const gates: Partial<Record<ZoneId, string>> = { forest: 'forest-elite', waterway: 'water-elite', tower: 'eclipse' };
+  const gate = gates[state.zone];
   return gate && !state.defeated.includes(gate) ? '前方的守衛仍在等待。先面對它吧。' : null;
 }
 export function travel(state: GameState, direction: 1 | -1): GameState {
-  const next = structuredClone(state); const index = ZONE_ORDER.indexOf(state.zone) + direction;
+  const next = structuredClone(state); const index = shortRoute.indexOf(state.zone) + direction;
   if (index < 0 || index >= ZONE_ORDER.length) return next;
   next.zone = ZONE_ORDER[index]; next.position = { x: 0, z: direction === 1 ? 8.5 : -9 };
   next.checkpoint = { zone: next.zone, position: { x: 0, z: direction === 1 ? 8.5 : -9 } };
@@ -257,14 +265,15 @@ const finite = (n: unknown, min = 0, max = 1e7): n is number => typeof n === 'nu
 export function validSave(value: unknown): value is GameState {
   if (!value || typeof value !== 'object') return false;
   const s = value as GameState;
-  if (!['lien','loren'].includes(s.leaderId) || !Array.isArray(s.discoveredObjectIds) || !s.discoveredObjectIds.every(id => Object.values(ZONES).some(z => z.objects.some(o => o.id === id)))) return false;
-  if (s.version !== 1 || !ZONE_ORDER.includes(s.zone) || !finite(s.position?.x, -14, 14) || !finite(s.position?.z, -11, 11)) return false;
+  if (![s.flags, s.defeated].every(a => Array.isArray(a) && a.every(v => typeof v === 'string'))) return false;
+  const zones = isMedium(s) ? Object.keys(ZONES) : shortRoute;
+  if (!['lien','loren'].includes(s.leaderId) || !Array.isArray(s.discoveredObjectIds) || !s.discoveredObjectIds.every(id => Object.values(ZONES).some(z => z.objects.some(o => o.id === id)) || isMedium(s) && MEDIUM_NOTES.some(([note]) => note === id))) return false;
+  if (s.version !== 1 || !zones.includes(s.zone) || !finite(s.position?.x, -14, 14) || !finite(s.position?.z, -11, 11)) return false;
   if (!Array.isArray(s.party) || s.party.length !== 2 || s.party[0]?.id !== 'lien' || s.party[1]?.id !== 'loren') return false;
   if (!s.party.every(h => h.name === (h.id === 'lien' ? '莉恩' : '洛恩') && [h.hp, h.mp, h.maxHp, h.maxMp, h.atk, h.def, h.speed].every(n => finite(n, 0, 10000)) && h.maxHp > 0 && h.hp <= h.maxHp && h.mp <= h.maxMp && [null, 'moon-charm', 'memory-charm'].includes(h.accessory))) return false;
   if (!finite(s.xp) || !finite(s.gold) || !finite(s.playSeconds) || !s.inventory || !['potion', 'ether', 'revive'].every(k => Number.isInteger(s.inventory[k as ItemId]) && finite(s.inventory[k as ItemId]))) return false;
-  if (![s.flags, s.defeated].every(a => Array.isArray(a) && a.every(v => typeof v === 'string'))) return false;
   if (!s.mechanisms || typeof s.mechanisms !== 'object' || !Object.values(s.mechanisms).every(n => Number.isInteger(n) && finite(n, 0, 3))) return false;
-  if (!s.checkpoint || !ZONE_ORDER.includes(s.checkpoint.zone) || !finite(s.checkpoint.position?.x, -14, 14) || !finite(s.checkpoint.position?.z, -11, 11)) return false;
+  if (!s.checkpoint || !zones.includes(s.checkpoint.zone) || !finite(s.checkpoint.position?.x, -14, 14) || !finite(s.checkpoint.position?.z, -11, 11)) return false;
   return !!s.settings && finite(s.settings.volume, 0, 1) && ['low', 'high'].includes(s.settings.quality) && typeof s.settings.reducedMotion === 'boolean' && typeof s.settings.autoStopLowHp === 'boolean';
 }
 export function migrateSave(value: unknown): unknown {

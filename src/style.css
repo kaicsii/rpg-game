@@ -184,3 +184,7 @@
   .title-content{top:clamp(70px,17%,175px);max-height:calc(100% - clamp(70px,17%,175px) - 66px);overflow-y:auto}
   .title-content h1{font-size:clamp(52px,min(6cqw,12cqh),106px)}
 }
+.medium-entry{color:var(--gold);border-color:#bfa36e8c}
+.regional-travel{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 16px}
+.chapter-card .outline-button{margin-top:16px}
+.dialogue-footer:has([data-action^="dialogue:choice"]){flex-wrap:wrap;gap:8px}

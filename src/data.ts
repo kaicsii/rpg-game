@@ -1,4 +1,7 @@
-export type ZoneId = 'village' | 'forest' | 'waterway' | 'tower';
+import { EXTRA_ZONES, MEDIUM_FOES } from './medium-content';
+
+export type ShortZoneId = 'village' | 'forest' | 'waterway' | 'tower';
+export type ZoneId = ShortZoneId | 'station' | 'highland' | 'archive' | 'corridor';
 export type Element = 'slash' | 'fire' | 'star';
 export type CombatEffect = Element | 'resonance' | 'heal';
 export type ItemId = 'potion' | 'ether' | 'revive';
@@ -12,10 +15,10 @@ export interface GameState {
   mechanisms: Record<string, number>; checkpoint: { zone: ZoneId; position: Vec2 };
   playSeconds: number; settings: Settings;
 }
-export interface Interactable extends Vec2 { id: string; label: string; kind: 'npc' | 'lamp' | 'mechanism' | 'chest' | 'herb' | 'memory' | 'exit' | 'back' | 'lore' | 'clue'; }
+export interface Interactable extends Vec2 { id: string; label: string; kind: 'npc' | 'lamp' | 'mechanism' | 'chest' | 'herb' | 'memory' | 'exit' | 'back' | 'lore' | 'clue' | 'story'; }
 export interface Encounter extends Vec2 { id: string; enemies: string[]; required?: boolean; }
 export interface Zone { id: ZoneId; name: string; subtitle: string; chapter: string; description: string; color: string; objects: Interactable[]; encounters: Encounter[]; }
-export const ZONES: Record<ZoneId, Zone> = {
+export const ZONES: Record<ShortZoneId, Zone> = {
   village: {
     id: 'village', name: '霧鐘村', subtitle: 'THE VILLAGE OF MISTBELLS', chapter: '序章 · 長夜的微光', color: '#78a6a0',
     description: '山霧拂過屋簷，遠處的鐘聲，比記憶中更輕。',
@@ -88,6 +91,7 @@ export const ZONES: Record<ZoneId, Zone> = {
     ],
   },
 };
+export const ALL_ZONES: Record<ZoneId, Zone> = { ...ZONES, ...EXTRA_ZONES };
 export interface Skill { id: string; name: string; description: string; owner: HeroId; level: number; cost: number; power: number; element?: Element; target: 'enemy' | 'all' | 'ally' | 'self'; effect?: 'heal' | 'armor' | 'cover'; }
 export const SKILLS: Skill[] = [
   { id: 'ember', name: '燈火', description: '以燈火灼燒一名敵人。火焰屬性。', owner: 'lien', level: 1, cost: 3, power: 1.5, element: 'fire', target: 'enemy' },
@@ -101,6 +105,7 @@ export const SKILLS: Skill[] = [
 ];
 export interface EnemyTemplate { name: string; hp: number; atk: number; def: number; speed: number; weakness: Element; xp: number; gold: number; color: string; shape: 'slime' | 'moth' | 'root' | 'wisp' | 'knight' | 'raven'; }
 export const ENEMIES: Record<string, EnemyTemplate> = {
+  ...MEDIUM_FOES,
   slime: { name: '露珠軟泥', hp: 42, atk: 9, def: 2, speed: 4, weakness: 'fire', xp: 7, gold: 8, color: '#7bc8af', shape: 'slime' },
   moth: { name: '月塵蛾', hp: 38, atk: 10, def: 2, speed: 10, weakness: 'slash', xp: 8, gold: 10, color: '#d5c1e0', shape: 'moth' },
   root: { name: '迷途樹靈', hp: 65, atk: 12, def: 5, speed: 3, weakness: 'fire', xp: 10, gold: 12, color: '#a2b575', shape: 'root' },
@@ -117,7 +122,7 @@ export const ITEMS: Record<ItemId, { name: string; description: string; price: n
   revive: { name: '甦醒之羽', description: '復甦並恢復一半生命', price: 25 },
 };
 export const ELEMENT_NAMES: Record<Element, string> = { fire: '火焰', star: '星光', slash: '斬擊' };
-export const ZONE_ORDER: ZoneId[] = ['village', 'forest', 'waterway', 'tower'];
+export const ZONE_ORDER: ShortZoneId[] = ['village', 'forest', 'waterway', 'tower'];
 export const BRIDGE_CLUES: Record<HeroId, { action: string; summary: string; lines: string[][] }> = {
   lien: { action: '讀取燈中記憶', summary: '莉恩聽見守橋人的約定：舊鈴一響，等候的人就能回家。暖火曾讓緊閉的樹皮鬆開。', lines: [
     ['莉恩', '讓我用提燈照一照……火苗裡有個人。他把一串不響的鈴掛在橋上，說要等最後一個人回來。'],
@@ -208,7 +213,7 @@ export const LORE: Record<string, { title: string; lines: string[][] }> = {
     ['洛恩', '或許正因如此，他才為後來的人，留下了這句話。'],
   ] },
 };
-const lorePositions: Record<ZoneId, { id: string; x: number; z: number }[]> = {
+const lorePositions: Record<ShortZoneId, { id: string; x: number; z: number }[]> = {
   village: [{ id: 'village-letter', x: -10, z: 4 }, { id: 'village-bell', x: 4, z: -6 }],
   forest: [{ id: 'forest-song', x: -10, z: -2 }, { id: 'forest-keeper', x: 10, z: 6 }],
   waterway: [{ id: 'waterway-names', x: -9, z: 6 }, { id: 'waterway-boat', x: 9, z: -1 }],
