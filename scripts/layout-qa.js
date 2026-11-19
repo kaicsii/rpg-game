@@ -32,6 +32,12 @@ async page => {
     check(await fits(['.dialogue-panel','.dialogue-footer','.dialogue-next']),`Dialogue fits ${width}×${height}`);
     await page.keyboard.press('Escape');
     check(await fits(['.hud-top','.hud-nav','.location','.quest-widget','.party-strip','.minimap','.key-guide'])&&await hudAnchors(),`Exploration HUD fits and aligns at the edges ${width}×${height}`);
+    check((await page.locator('.hero-chip .hud-vitals .vital-row').count()) === 4, `Both heroes show HP and MP ${width}×${height}`);
+    if (width <= 640) check(await page.evaluate(() => {
+      const button = document.querySelector('.touch-interact').getBoundingClientRect();
+      const map = document.querySelector('.minimap').getBoundingClientRect();
+      return button.bottom <= map.top - 4;
+    }), `Touch action clears the map ${width}×${height}`);
     await page.keyboard.press('c');
     for(const name of ['旅人隊伍','旅途行囊','旅途設定','操作指南','旅途日誌','星燈記錄']){
       await page.locator('.menu-sidebar').getByRole('button',{name,exact:true}).click();
@@ -41,10 +47,32 @@ async page => {
     await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true,strong:true});});
     await page.evaluate(()=>window.__starlight.encounter('f3'));await page.waitForFunction(()=>!document.querySelector('.battle-thinking'));
     check(await fits(['.battle-header','.enemy-info','.battle-bottom']),`Battle fits ${width}×${height}`);
+    check(await page.evaluate(() => {
+      const enemy = document.querySelector('.enemy-info').getBoundingClientRect();
+      const footer = document.querySelector('.battle-bottom').getBoundingClientRect();
+      const header = document.querySelector('.battle-header').getBoundingClientRect();
+      return header.bottom <= enemy.top && enemy.bottom <= footer.top
+        && document.querySelectorAll('.turn-token.current[aria-current="step"]').length === 1
+        && document.querySelectorAll('.shield-pips .lit').length >= 2;
+    }), `Turn order and enemy information have separate readable areas ${width}×${height}`);
+    if (width === 1280 || width === 390) await page.screenshot({path:`output/playwright/hud-battle-${width}.png`});
     await page.locator('[data-action="battle:skills"]').click();
     check(await page.locator('.battle-commands').evaluate(el=>el.scrollWidth<=el.clientWidth+1),`Skills do not overflow ${width}×${height}`);
+    check(await page.locator('.skill-command:focus').count() === 1, `Opening skills moves focus to an available skill ${width}×${height}`);
     await page.screenshot({path:`output/playwright/rwd-${width}x${height}.png`});
   }
+  await page.setViewportSize({width:320,height:568});
+  await page.evaluate(() => { window.__starlight.fixture('tower',{ready:true,strong:true});window.__starlight.encounter('t2'); });
+  await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
+  check(await page.evaluate(() => {
+    const enemies = document.querySelectorAll('.enemy-card');
+    return enemies.length === 3 && new Set([...enemies].map(enemy => enemy.getBoundingClientRect().top)).size === 1;
+  }), 'Three enemy cards stay on one row on a 320px screen');
+  await page.locator('[data-action="act:attack"]').click();
+  check(await page.locator('.target-command').count() === 3 && (await page.locator('.target-command:focus').innerText()).includes('護盾'), 'Target choice shows all three enemies and focuses a tactical readout');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
+  check(await page.locator('.command:focus').count() === 1, 'Keyboard focus returns to the next command after an action');
   await page.setViewportSize({width:390,height:844});await page.evaluate(()=>window.__starlight.fixture('village'));
   const initialState=await page.evaluate(()=>window.__starlight.getState());
   await page.setViewportSize({width:1280,height:720});
@@ -71,6 +99,9 @@ async page => {
   await page.keyboard.press('Escape');
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:'output/playwright/viewport-explore-portrait.png'});
+  await page.setViewportSize({width:1280,height:720});
+  await page.screenshot({path:'output/playwright/hud-explore-1280.png'});
+  await page.setViewportSize({width:390,height:844});
   const before=await page.evaluate(()=>window.__starlight.getState().position);
   const right=page.getByRole('button',{name:'向右移動',exact:true});const rect=await right.boundingBox();
   await page.mouse.move(rect.x+rect.width/2,rect.y+rect.height/2);await page.mouse.down();await page.waitForTimeout(450);await page.mouse.up();

@@ -57,6 +57,8 @@ async page => {
     };
   }, audioModule);
   await interact('forest-exit');
+  for (const [slot, value] of [2, 3, 1].entries()) await page.locator(`[data-action="puzzle:${slot}:${value}"]`).click();
+  await page.getByRole('button', { name: '試敲鐘' }).click();
   await skip();
   await page.waitForFunction(() => window.forestNotes.includes('forest'));
   await page.evaluate(() => window.__starlight.encounter('forest-elite'));

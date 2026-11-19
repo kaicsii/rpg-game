@@ -14,7 +14,10 @@ async page => {
   await page.evaluate(()=>window.__starlight.interact('village-letter'));await page.keyboard.press('e');
   check(await page.evaluate(()=>window.__starlight.getMode()==='dialogue'),'E still advances one dialogue page');await page.keyboard.press('Escape');
   check(await page.evaluate(()=>window.__starlight.getState().flags.includes('village-letter')),'Esc collects lore');
-  await page.evaluate(()=>window.__starlight.interact('forest-exit'));await page.keyboard.press('Escape');
+  await page.evaluate(()=>window.__starlight.interact('forest-exit'));
+  for (const [slot, value] of [2, 3, 1].entries()) await page.locator(`[data-action="puzzle:${slot}:${value}"]`).click();
+  await page.getByRole('button', { name: '試敲鐘' }).click();
+  await page.keyboard.press('Escape');
   check(await page.evaluate(()=>window.__starlight.getState().zone==='forest'),'Esc completes zone transition');
   await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true,strong:true});window.__starlight.encounter('forest-elite');});await page.keyboard.press('Escape');await ready();
   check((await auto().getAttribute('aria-pressed'))==='false','Auto attack starts disabled');

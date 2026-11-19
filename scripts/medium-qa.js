@@ -93,6 +93,46 @@ async (page) => {
     await page.getByRole('button', { name: '繼續旅程', exact: true }).click();
     await page.locator('.save-slot').first().getByRole('button', { name: '讀取記錄' }).click();
   };
+  const solveBoard = async (board, target) => {
+    const panel = page.getByRole('dialog', { name: board.title });
+    const submit = panel.getByRole('button', { name: board.checkLabel });
+    const set = (slot, value) => panel.locator(`[data-action="puzzle:${slot}:${value}"]`).click();
+    check(await panel.isVisible(), `Board is shown: ${board.id}`);
+    await submit.click();
+    check((await panel.getByRole('status').textContent()).includes('空著'), 'Incomplete solution gets feedback');
+    for (const [slot, value] of board.answer.entries()) await set(slot, slot === 0 ? (value === 1 ? 2 : 1) : value);
+    await submit.click();
+    check(await panel.isVisible() && !(await read()).flags.includes(`puzzle-${board.id}`), `Wrong solution blocked: ${board.id}`);
+    if (board.id === 'bells') {
+      await page.keyboard.press('Escape');
+      check(await mode() === 'explore', 'Esc closes the puzzle without solving it');
+      await reload();
+      await interact(target);
+      check(await panel.locator('[data-action="puzzle:0:1"]').getAttribute('aria-pressed') === 'true', 'Incomplete slots persist after reload');
+    }
+    if (board.id === 'tracks') {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await panel.getByText('再看一點提示').click();
+      check(await panel.getByText(board.hint).isVisible(), 'Hint opens on a narrow viewport');
+      await page.screenshot({ path: 'output/playwright/puzzle-station-390.png' });
+      const choice = panel.locator('[data-action="puzzle:0:2"]');
+      await choice.scrollIntoViewIfNeeded();
+      const box = await choice.boundingBox();
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForFunction(() => document.querySelector('[data-action="puzzle:0:2"]')?.getAttribute('aria-pressed') === 'true');
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+      await cdp.detach();
+    } else {
+      await set(0, board.answer[0]);
+    }
+    await submit.click();
+    await skip();
+    check((await read()).flags.includes(`puzzle-${board.id}`), `Puzzle solved: ${board.id}`);
+    await page.setViewportSize({ width: 1280, height: 720 });
+  };
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('http://localhost:5173');
   await page.keyboard.press('Escape');
@@ -103,6 +143,7 @@ async (page) => {
   await skip();
   check((await read()).flags.includes('P00'), 'Opening is saved');
   const chapters = await page.evaluate(async () => (await import('/src/medium-content.ts')).MEDIUM_CHAPTERS);
+  const boards = await page.evaluate(async () => (await import('/src/puzzles.ts')).PUZZLE_BOARDS.map(({ failure, ...board }) => board));
   const battles = [];
   for (const chapter of chapters) {
     check((await read()).zone === chapter.zone, `Wrong region for ${chapter.title}`);
@@ -112,10 +153,32 @@ async (page) => {
     }
     for (const step of chapter.groups.flat()) {
       if (step.target === 'opening' || step.scene === 'C8-04') continue;
+      const board = boards.find(board => board.scene === step.scene);
       if (step.battle) battles.push(await fight(step.target, `${chapter.zone}-lamp`));
-      else if (step.target.startsWith('dial')) {
-        const value = [2, 1, 3][Number(step.target.at(-1)) - 1];
-        for (let i = 0; i < value; i++) await interact(step.target);
+      else if (board) {
+        await interact(step.target); await solveBoard(board, step.target);
+      } else if (step.scene === 'C1-02' && step.part === 1) {
+        await interact('forest-roots', false);
+        check((await page.locator('.dialogue-body > p').textContent()).includes('等候'), 'Forest inscription is readable');
+        await skip();
+        await interact('beacon-3');
+        check(!(await read()).mechanisms['beacon-3'], 'Forest rejects an out-of-order lantern');
+        await interact(step.target);
+      } else if (step.scene === 'C2-02') {
+        await interact(step.target);
+        if (step.part === 1) {
+          check(!(await read()).flags.includes('C2-02'), 'One sluice cannot finish the puzzle');
+          continue;
+        }
+        check(!(await read()).flags.includes('C2-02'), 'Two open sluices are insufficient if levels are equal');
+        await interact(step.target);
+      } else if (step.scene === 'C8-01') {
+        const turns = [2, 1, 3][step.part - 1];
+        for (let i = 0; i < turns; i++) await interact(step.target);
+        if (step.part < 3) {
+          check(!(await read()).flags.includes('C8-01'), 'Correct individual dial cannot open the gate');
+          continue;
+        }
       } else if (step.scene === 'C7-02') {
         await interact(step.target, false);
         for (let i = 0; i < 4; i++) await page.keyboard.press('e');
@@ -169,5 +232,5 @@ async (page) => {
   await page.setViewportSize({ width: 390, height: 844 });
   check(await page.getByRole('dialog', { name: '旅途日誌' }).isVisible(), 'Journal works in a narrow layout');
   check(errors.length === 0, errors.join('; '));
-  return { battles, scenes: 54, epilogue: 6, completedQuests: quests.length + 2, readNotes: notes.length, talks: talks.length };
+  return { battles, puzzles: boards.length + 3, scenes: 54, epilogue: 6, completedQuests: quests.length + 2, readNotes: notes.length, talks: talks.length };
 }

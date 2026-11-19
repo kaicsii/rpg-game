@@ -1,5 +1,6 @@
 import { ALL_ZONES, type GameState, type Interactable, type ZoneId } from './data';
 import { MEDIUM_CHAPTERS, MEDIUM_NOTES, MEDIUM_POINTS, MEDIUM_QUESTS, MEDIUM_ROUTE, MEDIUM_TALKS, MEDIUM_TEXT, type StoryStep } from './medium-content';
+import { fieldObjective } from './puzzles';
 
 export const isMedium = (state: GameState) => state.flags.includes('medium-campaign');
 export const mediumFlag = (step: StoryStep) => step.part ? `${step.scene}:${step.part}` : step.scene;
@@ -93,6 +94,10 @@ export function mediumObjective(state: GameState) {
   if (done(state, 'E06')) return { text: '黎明後可自由重訪各地，繼續未完成的約定。', targetIds: [] };
   if (done(state, 'C8-06')) return { text: '黎明已至。開始返鄉尾聲，看看各地的近況。', targetIds: [] };
   const steps = mediumSteps(state);
+  if (steps.some(step => ['C1-02', 'C2-02', 'C8-01'].includes(step.scene))) {
+    const field = fieldObjective(state);
+    if (field) return { text: field.text, targetIds: [...field.targetIds, ...steps.filter(step => step.scene === 'C2-03').map(step => step.target)] };
+  }
   if (steps.length) return { text: steps.map(step => step.prompt).join('／'), targetIds: steps.map(step => step.target) };
   const chapter = mediumChapter(state);
   if (!chapter) return { text: '前往北方星台。', targetIds: ['dawn'] };

@@ -13,8 +13,11 @@ async page => {
   await page.getByRole('button',{name:'設洛恩為帶隊角色'}).click();await page.keyboard.press('c');await page.keyboard.press('Tab');
   check(await page.evaluate(()=>window.__starlight.getState().leaderId==='loren'),'Menu Tab does not change leader');await page.keyboard.press('Escape');
   await page.evaluate(()=>window.__starlight.interact('elder'));await page.keyboard.press('Tab');check(await page.evaluate(()=>window.__starlight.getState().leaderId==='loren'),'Dialogue blocks leader shortcut');await page.keyboard.press('Escape');
-  await page.evaluate(()=>window.__starlight.interact('forest-exit'));await page.keyboard.press('Escape');check(await page.evaluate(()=>window.__starlight.getState().leaderId==='loren'),'Leader persists across zone travel');
-  await page.keyboard.press('m');check(await page.locator('.large-map .zone-map').isVisible(),'M opens north-facing map');check((await page.locator('.map-points').innerText()).includes('西側路燈'),'Map highlights main objective');await page.keyboard.press('Escape');
+  await page.evaluate(()=>window.__starlight.interact('forest-exit'));
+  for (const [slot, value] of [2, 3, 1].entries()) await page.locator(`[data-action="puzzle:${slot}:${value}"]`).click();
+  await page.getByRole('button', { name: '試敲鐘' }).click();
+  await page.keyboard.press('Escape');check(await page.evaluate(()=>window.__starlight.getState().leaderId==='loren'),'Leader persists across zone travel');
+  await page.keyboard.press('m');check(await page.locator('.large-map .zone-map').isVisible(),'M opens north-facing map');check((await page.locator('.map-points').innerText()).includes('根紋碑'),'Map highlights main objective');await page.keyboard.press('Escape');
   await page.evaluate(()=>window.__starlight.moveTo(-9,7.5));await page.waitForTimeout(200);check(await page.evaluate(()=>window.__starlight.getState().discoveredObjectIds.includes('herb-1')),'Approaching reveals collectible');
   await page.keyboard.press('Escape');await page.getByRole('button',{name:'保存進度',exact:true}).click();await page.keyboard.press('Escape');
   await load(()=>{});check(await page.evaluate(()=>window.__starlight.getState().leaderId==='loren'&&window.__starlight.getState().discoveredObjectIds.includes('herb-1')),'Save restores leader and discoveries');
@@ -36,7 +39,7 @@ async page => {
   check((await page.locator('.boss-phase').innerText()).includes('2 / 2'),'Boss phase-two indicator visible');
   for(const [width,height] of [[320,568],[390,844],[768,1024],[1024,768],[1280,720],[1920,1080],[844,390]]){
     await page.setViewportSize({width,height});await page.evaluate(()=>window.__starlight.fixture('forest',{ready:true,strong:true}));
-    if(width<=900){await page.locator('.map-open').click();}else await page.keyboard.press('m');
+    if(width<=900){await page.locator('.minimap-trigger').click();}else await page.keyboard.press('m');
     const fits=await page.locator('.menu-panel').evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;});check(fits,`Map RWD ${width}×${height}`);await page.keyboard.press('Escape');
     await page.evaluate(()=>window.__starlight.encounter('forest-elite'));await page.keyboard.press('Escape');await ready();await page.screenshot({path:`output/playwright/adventure-${width}.png`});
   }

@@ -17,7 +17,12 @@ export function mapView(state: GameState, world: World) {
   let base=zones.get(layout);
   if (!base) {
     const rect=(r:Obstacle,color:string)=>`<rect x="${r.x-r.w/2}" y="${r.z-r.d/2}" width="${r.w}" height="${r.d}" fill="${color}"/>`;
-    base='<rect x="-16" y="-13" width="32" height="26" rx="0.5" fill="#335b54"/>'+world.mapWater.map(r=>rect(r,'#416e83')).join('')+world.mapRoads.map(r=>rect(r,'#a19f77')).join('')+world.obstacles.map(r=>rect(r,'#193d3e')).join(''); zones.set(layout,base);
+    base = '<rect x="-16" y="-13" width="32" height="26" rx="0.5" fill="#23434a"/>'
+      + '<path d="M-12-13V13M-8-13V13M-4-13V13M0-13V13M4-13V13M8-13V13M12-13V13M-16-8H16M-16-4H16M-16 0H16M-16 4H16M-16 8H16" stroke="#bfd1bf" opacity=".16" stroke-width=".08"/>'
+      + world.mapWater.map(r => rect(r, '#416a83')).join('')
+      + world.mapRoads.map(r => rect(r, '#9c916c')).join('')
+      + world.obstacles.map(r => rect(r, '#142d37')).join('');
+    zones.set(layout, base);
   }
   const targets=getObjective(state).targetIds;
   const markers=mapPoints(state).map(o=>{
@@ -28,5 +33,9 @@ export function mapView(state: GameState, world: World) {
       o.kind === 'npc' ? '<path d="M0-.67 .63 0 0 .67-.63 0Z"/>' : `<circle r="${o.kind === 'lamp' ? 0.52 : 0.33}"/>`;
     return `<g transform="translate(${o.x} ${o.z})" fill="${color}" stroke="#102d32" stroke-width=".16"><title>${escape(o.label)}</title>${shape}</g>`;
   }).join('');
-  return `<svg class="zone-map" viewBox="-16 -13 32 26" role="img" aria-label="${ZONES[state.zone].name}地圖，北方朝上">${base}${markers}<circle data-map-player cx="${state.position.x}" cy="${state.position.z}" r="0.5" fill="#fff" stroke="#246c92" stroke-width="0.23"/><text x="14" y="-10.5" font-size="1.5" text-anchor="middle" fill="#fff2c9">N</text></svg>`;
+  return `<svg class="zone-map" viewBox="-16 -13 32 26" role="img" aria-label="${ZONES[state.zone].name}地圖，北方朝上">${base}${markers}
+    <circle data-map-player cx="${state.position.x}" cy="${state.position.z}" r=".53" fill="#fff9e9" stroke="#15303e" stroke-width=".26"/>
+    <path d="M13.8-12.2 12.9-10.25 13.8-10.64 14.7-10.25Z" fill="#ffdb95"/>
+    <text x="13.8" y="-8.8" font-size="1.5" text-anchor="middle" fill="#fff2c9">N</text>
+  </svg>`;
 }

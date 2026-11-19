@@ -8,6 +8,7 @@ import { ENEMIES, ALL_ZONES as ZONES, type CombatEffect, type GameState, type In
 import { type Battle, areaObjects, puzzleSolved } from './game';
 import { MEDIUM_NOTES, MEDIUM_QUESTS, MEDIUM_TALKS } from './medium-content';
 import { isMedium, mediumDestination } from './medium';
+import { DIAL_ALIGNMENT, VALVES, valveLevel } from './puzzles';
 import lienAtlas from './assets/lien-sprites.png';
 import lorenAtlas from './assets/loren-sprites.png';
 
@@ -115,7 +116,7 @@ export class World {
   private resizeTimer?: ReturnType<typeof setTimeout>;
   private readonly picker = new THREE.Raycaster();
   private readonly ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-  private gate?: THREE.Group; private beams: { mesh: THREE.Mesh; id: string; value: number }[] = [];
+  private gate?: THREE.Group; private beams: { mesh: THREE.Mesh; id: string; value: number; start: THREE.Vector3; direction: THREE.Vector3 }[] = [];
   private lastTime = 0; private direction = 0; private sun: THREE.DirectionalLight; private moon!: THREE.Mesh;
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -311,7 +312,13 @@ export class World {
         this.box(o.x, 0.51, o.z, optional ? 0.36 : 0.72, 0.12, optional ? 0.34 : 0.52, optional ? 0xb3d6cd : 0xe5c68e, this.root, true);
       }
       if (o.kind === 'mechanism') {
-        if (o.id.startsWith('beacon')) this.lamp(o.x, o.z, o.id);
+        if (o.id.startsWith('beacon')) {
+          this.lamp(o.x, o.z, o.id);
+          const rootSeal = new THREE.Mesh(new THREE.RingGeometry(0.77, 0.87, 24), this.material(0xe7bd75, true));
+          rootSeal.rotation.x = -Math.PI / 2;
+          rootSeal.position.y = 0.1;
+          this.lamps.get(o.id)!.add(rootSeal);
+        }
         else { this.cylinder(o.x, 0.3, o.z, 0.7, 0.6, 0x929f92); const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.1, 6, 12), this.material(0xd8bb7e)); wheel.rotation.x = -Math.PI / 2; wheel.position.set(o.x, 0.8, o.z); this.root.add(wheel); const g = new THREE.Group(); g.position.set(o.x, 0, o.z); this.root.add(g); this.lamps.set(o.id, g); this.box(0, 0.8, 0, 0.9, 0.1, 0.12, 0xaec5be, g); }
       }
       if (o.kind === 'chest') { const g = new THREE.Group(); g.position.set(o.x, 0, o.z); this.root.add(g); this.box(0, 0.35, 0, 0.85, 0.6, 0.65, 0x876344, g); this.box(0, 0.7, 0, 0.9, 0.18, 0.7, 0xb58f59, g); this.box(0, 0.5, 0.36, 0.15, 0.2, 0.03, 0xe2c182, g); this.lamps.set(o.id, g); }
@@ -325,9 +332,11 @@ export class World {
     for (const e of ZONES[zone].encounters) if (!state.defeated.includes(e.id)) this.sprite(e.enemies[0], e.x, e.z, e.id, e.required ? 1.5 : 1.05);
     if (zone === 'tower') {
       for (const [i, o] of ZONES.tower.objects.filter(o => o.id.startsWith('dial')).entries()) {
-        const start = new THREE.Vector3(o.x, 0.9, o.z); const end = new THREE.Vector3(0, 0.9, -7); const dir = end.clone().sub(start);
-        const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, dir.length(), 6), this.material(0x9ee7e1, true));
-        beam.position.copy(start).add(end).multiplyScalar(0.5); beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize()); this.root.add(beam); this.beams.push({ mesh: beam, id: o.id, value: [2, 1, 3][i] });
+        const start = new THREE.Vector3(o.x, 0.9, o.z);
+        const direction = new THREE.Vector3(0, 0.9, -7).sub(start);
+        const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1, 6), this.material(0x9ee7e1, true));
+        this.root.add(beam);
+        this.beams.push({ mesh: beam, id: o.id, value: DIAL_ALIGNMENT[i], start, direction });
       }
     }
     this.highlightRing = new THREE.Mesh(new THREE.RingGeometry(0.62,0.72,32),new THREE.MeshBasicMaterial({color:0xffdd95,transparent:true,opacity:0.8,side:THREE.DoubleSide,depthWrite:false})); this.highlightRing.rotation.x=-Math.PI/2; this.highlightRing.visible=false; this.root.add(this.highlightRing);
@@ -391,12 +400,21 @@ export class World {
       const exit = ZONES[state.zone].objects.find(o => o.kind === 'exit');
       this.gate.visible = isMedium(state) && state.zone !== 'tower' && exit ? !mediumDestination(state, exit.id) : !puzzleSolved(state);
     }
-    this.beams.forEach(b => { b.mesh.visible = state.mechanisms[b.id] === b.value; });
-    if (state.zone === 'waterway') this.water.forEach((w, i) => { w.position.y = state.mechanisms[`valve-${i + 1}`] ? -0.18 : -0.02; });
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const { mesh, id, value, start, direction } of this.beams) {
+      const angle = state.mechanisms[id] ?? 0;
+      mesh.visible = angle !== 0;
+      if (!mesh.visible) continue;
+      const ray = direction.clone().applyAxisAngle(up, (angle - value) * Math.PI / 4);
+      mesh.scale.y = ray.length();
+      mesh.position.copy(start).addScaledVector(ray, 0.5);
+      mesh.quaternion.setFromUnitVectors(up, ray.normalize());
+    }
+    if (state.zone === 'waterway') this.water.forEach((w, i) => { w.position.y = -0.02 - valveLevel(state, VALVES[i]) * 0.08; });
     for (const [id, g] of this.lamps) {
       if (id.startsWith('beacon')) g.children.forEach(child => { if (child instanceof THREE.PointLight) child.intensity = state.mechanisms[id] ? 6 : 0; if (child instanceof THREE.Mesh && (child.material as THREE.MeshStandardMaterial).emissiveIntensity > 1) child.visible = !!state.mechanisms[id]; });
       if (id.startsWith('dial')) g.rotation.y = (state.mechanisms[id] ?? 0) * Math.PI / 2;
-      if (id.startsWith('valve')) g.rotation.y = (state.mechanisms[id] ?? 0) * Math.PI / 2;
+      if (id.startsWith('valve')) g.rotation.y = valveLevel(state, id) * Math.PI / 2;
       if (id.includes('chest') || id.startsWith('herb') || id === 'pendant' || id === 'loren-memory') g.visible = !state.flags.includes(id);
     }
     for (const id of state.defeated) { const s = this.sprites.get(id); if (s) { s.visible = false; s.userData.shadow.visible = false; } }

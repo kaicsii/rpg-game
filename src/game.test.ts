@@ -4,6 +4,7 @@ import { ZONES, ALL_ZONES, SKILLS, type GameState, type Encounter } from './data
 import { newGame, levelFor, partyLevel, areaObjects, heroStats, damage, startBattle, resolveAction, advanceEnemies, currentActor, finishBattle, grantFlag, bridgeClueFlag, completeBridgeQuest, revealedWeaknesses, enemyThreat, saveGame, loadGame, validSave, refreshStats, healParty, puzzleSolved, canLeave, travel, applyItem, type Battle, type Action } from './game';
 import { MEDIUM_CHAPTERS, MEDIUM_QUESTS } from './medium-content';
 import { finishMediumAction, finishQuestStop, mediumDestination, mediumLines, mediumProgress, mediumSteps, unlockedRegions } from './medium';
+import { boardSaved, boardValues, checkPuzzleBoard, choosePuzzleValue, nextForestBeacon, PUZZLE_BOARDS, turnValve, valveLevel, waterDrained } from './puzzles';
 const fixture = (id: string): Encounter => Object.values(ZONES).flatMap(z => z.encounters).find(e => e.id === id)!;
 const ready = (xp = 160) => { const s = newGame(); s.xp = xp; refreshStats(s); healParty(s); return s; };
 
@@ -132,9 +133,45 @@ test('level caps at five, equipment increases maximum stats without reviving', (
   assert.equal(s.party[0].hp, 0); assert.equal(s.party[0].maxHp, 117);
 });
 test('puzzles and gate conditions persist, travel is reversible', () => {
-  let s = newGame(); assert.ok(canLeave(s)); s.flags.push('main-quest'); assert.equal(canLeave(s), null); s = travel(s, 1); assert.equal(s.zone, 'forest');
+  let s = newGame(); assert.ok(canLeave(s)); s.flags.push('main-quest'); assert.match(canLeave(s)!, /鐘譜/);
+  s.flags.push('puzzle-bells'); assert.equal(canLeave(s), null); s = travel(s, 1); assert.equal(s.zone, 'forest');
   Object.assign(s.mechanisms, { 'beacon-1': 1, 'beacon-2': 1, 'beacon-3': 1 }); assert.equal(puzzleSolved(s), true); assert.ok(canLeave(s));
   s.defeated.push('forest-elite'); assert.equal(canLeave(s), null); s = travel(s, 1); assert.equal(s.zone, 'waterway'); s = travel(s, -1); assert.equal(s.zone, 'forest'); assert.equal(puzzleSolved(s), true);
+});
+test('所有解謎面板拒絕未完成或錯誤答案，只在提交正解後鎖定並可續讀', () => {
+  const s = newGame();
+  for (const board of PUZZLE_BOARDS) {
+    assert.ok(checkPuzzleBoard(s, board), board.id);
+    assert.equal(boardSaved(s, board), false);
+    board.answer.forEach((value, i) => choosePuzzleValue(s, board, i, i === 0 ? (value === 1 ? 2 : 1) : value));
+    assert.ok(checkPuzzleBoard(s, board), board.id);
+    assert.equal(boardSaved(s, board), false);
+    assert.ok(validSave(JSON.parse(JSON.stringify(s))));
+    board.answer.forEach((value, i) => choosePuzzleValue(s, board, i, value));
+    assert.equal(checkPuzzleBoard(s, board), undefined);
+    assert.equal(boardSaved(s, board), true);
+    choosePuzzleValue(s, board, 0, 1);
+    assert.deepEqual(boardValues(s, board), board.answer);
+  }
+});
+test('野外機關接受舊存檔，水閘需同時分流並能修正誤設', () => {
+  const s = newGame();
+  assert.equal(nextForestBeacon(s), 'beacon-1');
+  s.mechanisms['beacon-2'] = 1;
+  assert.equal(nextForestBeacon(s), 'beacon-1');
+  s.mechanisms['beacon-1'] = 1;
+  assert.equal(nextForestBeacon(s), 'beacon-3');
+  s.zone = 'waterway'; s.flags.push('loren-memory');
+  s.mechanisms['valve-1'] = 1;
+  assert.equal(valveLevel(s, 'valve-1'), 1);
+  turnValve(s, 'valve-2');
+  assert.equal(valveLevel(s, 'valve-2'), 1);
+  assert.equal(puzzleSolved(s), false);
+  turnValve(s, 'valve-2');
+  assert.equal(waterDrained(s), true);
+  assert.equal(puzzleSolved(s), true);
+  turnValve(s, 'valve-2');
+  assert.equal(valveLevel(s, 'valve-2'), 2);
 });
 test('save roundtrip, version check, corrupt slot isolation, blocked storage', () => {
   const map = new Map<string, string>(); const storage = { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => { map.set(key, value); } };
@@ -220,9 +257,9 @@ test('legacy version one saves migrate without altering progress or accepting in
 test('objective markers follow main progression, travel direction, mechanisms and ending', async()=>{
   const {getObjective}=await import('./game');const s=newGame();
   assert.deepEqual(getObjective(s).targetIds,['elder']);s.flags.push('main-quest');assert.deepEqual(getObjective(s).targetIds,['forest-exit']);
-  s.zone='forest';assert.deepEqual(getObjective(s).targetIds,['beacon-1','beacon-2','beacon-3']);s.mechanisms={'beacon-1':1,'beacon-2':1,'beacon-3':1};assert.deepEqual(getObjective(s).targetIds,['forest-elite']);
-  s.defeated.push('forest-elite');assert.deepEqual(getObjective(s).targetIds,['waterway-exit']);s.zone='waterway';assert.deepEqual(getObjective(s).targetIds,['loren-memory']);s.flags.push('loren-memory');assert.deepEqual(getObjective(s).targetIds,['valve-1','valve-2']);s.mechanisms['valve-1']=s.mechanisms['valve-2']=1;assert.deepEqual(getObjective(s).targetIds,['water-elite']);
-  s.defeated.push('water-elite');s.zone='forest';assert.deepEqual(getObjective(s).targetIds,['waterway-exit']);s.zone='tower';assert.deepEqual(getObjective(s).targetIds,['dial-1','dial-2','dial-3']);Object.assign(s.mechanisms,{'dial-1':2,'dial-2':1,'dial-3':3});assert.deepEqual(getObjective(s).targetIds,['eclipse']);s.defeated.push('eclipse');assert.deepEqual(getObjective(s).targetIds,['dawn']);s.flags.push('ending');assert.deepEqual(getObjective(s).targetIds,['tower-back']);s.zone='village';assert.deepEqual(getObjective(s).targetIds,[]);
+  s.zone='forest';assert.deepEqual(getObjective(s).targetIds,['forest-roots','beacon-1','beacon-2','beacon-3']);s.mechanisms={'beacon-1':1,'beacon-2':1,'beacon-3':1};assert.deepEqual(getObjective(s).targetIds,['forest-elite']);
+  s.defeated.push('forest-elite');assert.deepEqual(getObjective(s).targetIds,['waterway-exit']);s.zone='waterway';assert.deepEqual(getObjective(s).targetIds,['loren-memory']);s.flags.push('loren-memory');assert.deepEqual(getObjective(s).targetIds,['water-gauge','valve-1','valve-2']);s.mechanisms['valve-1']=s.mechanisms['valve-2']=1;assert.deepEqual(getObjective(s).targetIds,['water-elite']);
+  s.defeated.push('water-elite');s.zone='forest';assert.deepEqual(getObjective(s).targetIds,['waterway-exit']);s.zone='tower';assert.deepEqual(getObjective(s).targetIds,['tower-stele','dial-1','dial-2','dial-3']);Object.assign(s.mechanisms,{'dial-1':2,'dial-2':1,'dial-3':3});assert.deepEqual(getObjective(s).targetIds,['eclipse']);s.defeated.push('eclipse');assert.deepEqual(getObjective(s).targetIds,['dawn']);s.flags.push('ending');assert.deepEqual(getObjective(s).targetIds,['tower-back']);s.zone='village';assert.deepEqual(getObjective(s).targetIds,[]);
 });
 test('four-unit discovery boundary is persistent, idempotent and hides collected items',async()=>{
   const {discoverNearby,visibleMapObjects}=await import('./game');const s=newGame();s.zone='forest';s.position={x:-9,z:9};

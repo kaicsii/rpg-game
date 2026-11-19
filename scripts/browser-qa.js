@@ -23,7 +23,10 @@ async (page) => {
   check(Math.hypot(restored.position.x - after.x, restored.position.z - after.z) < 0.3, 'Save restores player position');
   await page.evaluate(() => { window.__starlight.interact('elder'); window.__starlight.advanceDialogue(); });
   check(await page.evaluate(() => window.__starlight.getState().flags.includes('main-quest')), 'Main quest accepted');
-  await page.evaluate(() => { window.__starlight.interact('forest-exit'); window.__starlight.advanceDialogue(); });
+  await page.evaluate(() => window.__starlight.interact('forest-exit'));
+  for (const [slot, value] of [2, 3, 1].entries()) await page.locator(`[data-action="puzzle:${slot}:${value}"]`).click();
+  await page.getByRole('button', { name: '試敲鐘' }).click();
+  await page.keyboard.press('Escape');
   check(await page.evaluate(() => window.__starlight.getState().zone === 'forest'), 'World travel works');
   await page.evaluate(() => { for (const id of ['beacon-1', 'beacon-2', 'beacon-3', 'herb-1', 'herb-2', 'herb-3']) window.__starlight.interact(id); });
   async function fight(id, lamp) {
@@ -60,7 +63,7 @@ async (page) => {
   }
   for (const id of ['f1', 'f2', 'f3', 'forest-elite']) await fight(id, 'forest-lamp');
   await page.evaluate(() => { window.__starlight.interact('waterway-exit'); window.__starlight.advanceDialogue(); });
-  await page.evaluate(() => { window.__starlight.interact('loren-memory'); window.__starlight.advanceDialogue(); window.__starlight.interact('pendant'); window.__starlight.advanceDialogue(); window.__starlight.interact('valve-1'); window.__starlight.interact('valve-2'); });
+  await page.evaluate(() => { window.__starlight.interact('loren-memory'); window.__starlight.advanceDialogue(); window.__starlight.interact('pendant'); window.__starlight.advanceDialogue(); window.__starlight.interact('valve-1'); window.__starlight.interact('valve-2'); window.__starlight.interact('valve-2'); });
   for (const id of ['w1', 'w2', 'w3', 'water-elite']) await fight(id, 'waterway-lamp');
   await page.evaluate(() => { window.__starlight.interact('tower-exit'); window.__starlight.advanceDialogue(); for (const id of ['dial-1', 'dial-1', 'dial-2', 'dial-3', 'dial-3', 'dial-3']) window.__starlight.interact(id); });
   for (const id of ['t1', 't2', 't3', 'eclipse']) await fight(id, 'tower-lamp');
@@ -75,7 +78,8 @@ async (page) => {
   await page.keyboard.press('Escape'); await page.getByRole('button', { name: '保存進度', exact: true }).click(); await page.keyboard.press('Escape');
   // Check every interaction and encounter has a collision-free route from its area entrance.
   report.navigation = await page.evaluate(async () => {
-    const { ZONES } = await import('/src/data.ts'); const g = window.__starlight; const results = [];
+    const { ZONES } = await import('/src/data.ts');
+    const { areaObjects } = await import('/src/game.ts'); const g = window.__starlight; const results = [];
     for (const zone of Object.values(ZONES)) {
       g.fixture(zone.id, { ready: true });
       const seen = new Set(), queue = [[0, 8.5]], reachable = []; let cursor = 0;
@@ -83,7 +87,7 @@ async (page) => {
         const [x, z] = queue[cursor++], key = `${x},${z}`; if (seen.has(key) || !g.canWalk(x,z)) continue; seen.add(key); reachable.push({x,z});
         for (const [dx,dz] of [[0.5,0],[-0.5,0],[0,0.5],[0,-0.5]]) { const nx=x+dx,nz=z+dz; if (Math.abs(nx)<14 && Math.abs(nz)<11 && !seen.has(`${nx},${nz}`)) queue.push([nx,nz]); }
       }
-      const inaccessible = [...zone.objects, ...zone.encounters].filter(o => !reachable.some(p => Math.hypot(p.x-o.x,p.z-o.z) < (o.enemies ? 0.9 : 2))).map(o => o.id);
+      const inaccessible = [...areaObjects(g.getState()), ...zone.encounters].filter(o => !reachable.some(p => Math.hypot(p.x-o.x,p.z-o.z) < (o.enemies ? 0.9 : 2))).map(o => o.id);
       results.push({zone:zone.id, reachable:seen.size, inaccessible});
     }
     return results;

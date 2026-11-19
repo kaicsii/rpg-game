@@ -1,10 +1,15 @@
 import { ENEMIES, SKILLS, ALL_ZONES as ZONES, ZONE_ORDER, type GameState, type CombatEffect, type Hero, type ItemId, type Encounter, type Element, type HeroId, type ZoneId } from './data';
 import { MEDIUM_NOTES } from './medium-content';
 import { isMedium, mediumObjects, mediumObjective } from './medium';
+import { FIELD_CLUES, fieldObjective, nextForestBeacon, northGateOpen, skyAligned, waterDrained } from './puzzles';
 const shortRoute: readonly ZoneId[] = ZONE_ORDER;
 export const levelFor = (xp: number, medium = false) => (medium ? [0, 20, 55, 100, 160, 225, 300, 380, 470] : [0, 20, 55, 100, 160]).filter(n => xp >= n).length;
 export const partyLevel = (state: GameState) => levelFor(state.xp, isMedium(state));
-export const areaObjects = (state: GameState) => isMedium(state) ? mediumObjects(state) : ZONES[state.zone].objects;
+export const areaObjects = (state: GameState) => {
+  const objects = isMedium(state) ? mediumObjects(state) : ZONES[state.zone].objects;
+  const clue = FIELD_CLUES[state.zone];
+  return clue ? [...objects, clue.point] : objects;
+};
 export function heroStats(id: HeroId, level: number, accessory: string | null = null, weapon = false): Hero {
   const mage = id === 'lien';
   const maxHp = (mage ? 92 : 125) + (level - 1) * 18 + (accessory === 'moon-charm' ? 25 : 0);
@@ -42,9 +47,9 @@ export function applyItem(hero: Hero, item: ItemId): boolean {
   return true;
 }
 export function puzzleSolved(state: GameState, zone: ZoneId = state.zone): boolean {
-  if (zone === 'forest') return [1, 2, 3].every(n => state.mechanisms[`beacon-${n}`] === 1);
-  if (zone === 'waterway') return [1, 2].every(n => state.mechanisms[`valve-${n}`] === 1) && has(state, 'loren-memory');
-  if (zone === 'tower') return [2, 1, 3].every((v, i) => state.mechanisms[`dial-${i + 1}`] === v);
+  if (zone === 'forest') return !nextForestBeacon(state);
+  if (zone === 'waterway') return waterDrained(state) && has(state, 'loren-memory');
+  if (zone === 'tower') return skyAligned(state);
   return has(state, 'main-quest');
 }
 export function getObjective(state: GameState): { text: string; targetIds: string[] } {
@@ -54,19 +59,15 @@ export function getObjective(state: GameState): { text: string; targetIds: strin
   const back = () => ZONES[state.zone].objects.find(o => o.kind === 'back')!.id;
   if (has(state, 'ending')) return result('黎明已至。回到村莊，與大家分享這段旅程。', ...(state.zone === 'village' ? [] : [back()]));
   if (!has(state, 'main-quest')) return result('與廣場上的守燈婆婆交談', state.zone === 'village' ? 'elder' : back());
+  if (state.zone === 'village' && !northGateOpen(state)) return result('到北方出口解開鐘譜，前往螢光森林。', 'forest-exit');
   const destination = !state.defeated.includes('forest-elite') ? 'forest' : !state.defeated.includes('water-elite') ? 'waterway' : 'tower';
   if (state.zone !== destination) return result(`前往${ZONES[destination].name}，繼續尋回星火`, shortRoute.indexOf(state.zone) < shortRoute.indexOf(destination) ? exit() : back());
-  if (state.zone === 'forest') {
-    if (!puzzleSolved(state)) return result(`點亮林間路燈（${[1,2,3].filter(n => state.mechanisms[`beacon-${n}`]).length} / 3）`, ...[1,2,3].filter(n => !state.mechanisms[`beacon-${n}`]).map(n => `beacon-${n}`));
-    return result('擊敗古橋守木，取得第一縷星火', 'forest-elite');
-  }
+  if (state.zone === 'forest') return fieldObjective(state) ?? result('擊敗古橋守木，取得第一縷星火', 'forest-elite');
   if (state.zone === 'waterway') {
     if (!has(state, 'loren-memory')) return result('找回水道西北方的騎士記憶', 'loren-memory');
-    if (!puzzleSolved(state)) return result('開啟東、西兩道水閘', ...[1,2].filter(n => !state.mechanisms[`valve-${n}`]).map(n => `valve-${n}`));
-    return result('擊敗守潮者，打開鐘塔的道路', 'water-elite');
+    return fieldObjective(state) ?? result('擊敗守潮者，打開鐘塔的道路', 'water-elite');
   }
-  if (!puzzleSolved(state)) return result('依碑文調整星盤：西二、東一、北三', ...[2,1,3].flatMap((v,i) => state.mechanisms[`dial-${i+1}`] === v ? [] : [`dial-${i+1}`]));
-  return state.defeated.includes('eclipse') ? result('走向北方星台，重燃星燈', 'dawn') : result('面對無光的守鐘人', 'eclipse');
+  return fieldObjective(state) ?? (state.defeated.includes('eclipse') ? result('走向北方星台，重燃星燈', 'dawn') : result('面對無光的守鐘人', 'eclipse'));
 }
 export const objective = (state: GameState) => getObjective(state).text;
 export function discoverNearby(state: GameState): boolean {
@@ -118,6 +119,7 @@ export function combatStatuses(battle: Battle, id: string): string[] {
 }
 export function canLeave(state: GameState): string | null {
   if (!puzzleSolved(state)) return state.zone === 'village' ? '先和守燈婆婆談談，再出發吧。' : '還有未完成的機關。任務日誌裡有線索。';
+  if (state.zone === 'village' && !northGateOpen(state)) return '北門還在等三聲鐘響。走近出口試著解讀鐘譜。';
   const gates: Partial<Record<ZoneId, string>> = { forest: 'forest-elite', waterway: 'water-elite', tower: 'eclipse' };
   const gate = gates[state.zone];
   return gate && !state.defeated.includes(gate) ? '前方的守衛仍在等待。先面對它吧。' : null;
@@ -126,6 +128,7 @@ export function travel(state: GameState, direction: 1 | -1): GameState {
   const next = structuredClone(state); const index = shortRoute.indexOf(state.zone) + direction;
   if (index < 0 || index >= ZONE_ORDER.length) return next;
   next.zone = ZONE_ORDER[index]; next.position = { x: 0, z: direction === 1 ? 8.5 : -9 };
+  if (next.zone === 'forest' && !has(next, 'visited-forest')) next.flags.push('visited-forest');
   next.checkpoint = { zone: next.zone, position: { x: 0, z: direction === 1 ? 8.5 : -9 } };
   return next;
 }

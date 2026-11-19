@@ -38,9 +38,9 @@ export const ZONES: Record<ShortZoneId, Zone> = {
     objects: [
       { id: 'forest-back', label: '返回霧鐘村', kind: 'back', x: 0, z: 10.5 },
       { id: 'forest-lamp', label: '星燈 · 林間營地', kind: 'lamp', x: 3, z: 7 },
-      { id: 'beacon-1', label: '點亮西側路燈', kind: 'mechanism', x: -7, z: 2 },
-      { id: 'beacon-2', label: '點亮東側路燈', kind: 'mechanism', x: 7, z: -2 },
-      { id: 'beacon-3', label: '點亮古橋路燈', kind: 'mechanism', x: -3, z: -6 },
+      { id: 'beacon-1', label: '西燈 · 門', kind: 'mechanism', x: -7, z: 2 },
+      { id: 'beacon-2', label: '東燈 · 長凳', kind: 'mechanism', x: 7, z: -2 },
+      { id: 'beacon-3', label: '古橋燈 · 無名', kind: 'mechanism', x: -3, z: -6 },
       { id: 'herb-1', label: '採集月露草', kind: 'herb', x: -9, z: 5 },
       { id: 'herb-2', label: '採集月露草', kind: 'herb', x: 9, z: 1 },
       { id: 'herb-3', label: '採集月露草', kind: 'herb', x: -7, z: -6 },
@@ -59,8 +59,8 @@ export const ZONES: Record<ShortZoneId, Zone> = {
     objects: [
       { id: 'waterway-back', label: '返回螢光森林', kind: 'back', x: 0, z: 10.5 },
       { id: 'waterway-lamp', label: '星燈 · 守望平台', kind: 'lamp', x: -3, z: 7 },
-      { id: 'valve-1', label: '開啟西側水閘', kind: 'mechanism', x: -7, z: 1 },
-      { id: 'valve-2', label: '開啟東側水閘', kind: 'mechanism', x: 7, z: -4 },
+      { id: 'valve-1', label: '調整西側水閘', kind: 'mechanism', x: -7, z: 1 },
+      { id: 'valve-2', label: '調整東側水閘', kind: 'mechanism', x: 7, z: -4 },
       { id: 'loren-memory', label: '拾起騎士的記憶', kind: 'memory', x: -6, z: -5 },
       { id: 'pendant', label: '水邊的銀色墜飾', kind: 'memory', x: 8, z: 4 },
       { id: 'waterway-chest', label: '石室中的寶箱', kind: 'chest', x: -9, z: -1 },
@@ -78,9 +78,9 @@ export const ZONES: Record<ShortZoneId, Zone> = {
     objects: [
       { id: 'tower-back', label: '返回沉星水道', kind: 'back', x: 0, z: 10.5 },
       { id: 'tower-lamp', label: '星燈 · 最後的歇息', kind: 'lamp', x: 3, z: 7 },
-      { id: 'dial-1', label: '西星盤 · 碑文「二」', kind: 'mechanism', x: -7, z: 3 },
-      { id: 'dial-2', label: '東星盤 · 碑文「一」', kind: 'mechanism', x: 7, z: 0 },
-      { id: 'dial-3', label: '北星盤 · 碑文「三」', kind: 'mechanism', x: -3, z: -5 },
+      { id: 'dial-1', label: '調整西星盤', kind: 'mechanism', x: -7, z: 3 },
+      { id: 'dial-2', label: '調整東星盤', kind: 'mechanism', x: 7, z: 0 },
+      { id: 'dial-3', label: '調整北星盤', kind: 'mechanism', x: -3, z: -5 },
       { id: 'tower-chest', label: '守燈人的遺贈', kind: 'chest', x: 9, z: -5 },
       { id: 'dawn', label: '眺望重生的山城', kind: 'exit', x: 0, z: -10.2 },
     ], encounters: [
