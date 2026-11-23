@@ -1,7 +1,8 @@
 import './style.css';
 import './hud.css';
 import { mapView, mapPoints, mapSymbol } from './map';
-import { World, loadHeroAtlases, pixelTexture } from './world';
+import { World } from './world';
+import { loadHeroAtlases, NPC_ART, pixelTexture } from './sprites';
 import { AudioDirector } from './audio';
 import { ALL_ZONES as ZONES, ZONE_ORDER, SKILLS, ITEMS, ENEMIES, ELEMENT_NAMES, LORE, OPENING, LOREN_MEMORY, ENDING, BRIDGE_CLUES, GUARDIAN_INTRO, type GameState, type Hero, type HeroId, type ItemId, type Interactable, type Encounter, type ZoneId } from './data';
 import { newGame, has, grantFlag, bridgeClueFlag, completeBridgeQuest, refreshStats, healParty, partyLevel, areaObjects, objective, getObjective, discoverNearby, shouldStopAutoAttack, enemyIntent, enemyThreat, revealedWeaknesses, combatStatuses, canLeave, puzzleSolved, travel, closestObject, explorationMarkers, applyItem, saveGame, loadGame, startBattle, currentActor, resolveAction, advanceEnemies, finishBattle, type Battle, type Action, type BattleEvent } from './game';
@@ -37,6 +38,7 @@ const esc = (s: string | number) => String(s).replace(/[&<>"']/g, ch => ({ '&': 
 const icon = (name: string, cls = '') => {
   const paths: Record<string, string> = {
     star: '<path d="m12 2 2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5Z"/>',
+    lantern: '<path d="M9 6V5a3 3 0 0 1 6 0v1M5 9l2-3h10l2 3M5 9h14l-2 12H7ZM5 21h14m-7-10v7m-3-3.5h6"/>',
     moon: '<path d="M20.5 14.2A9 9 0 0 1 9.8 3.5a9 9 0 1 0 10.7 10.7Z"/>',
     book: '<path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1Zm0 0v15"/>',
     chat: '<path d="M4 4h16v12H10l-5 4v-4H4zM8 10h.1M12 10h.1M16 10h.1"/>',
@@ -497,7 +499,7 @@ function hud() {
   const dawn = has(state, 'ending');
   return `<header class="hud-top">
     <div class="hud-context">
-      <div class="location"><span class="location-symbol">${icon('pin')}</span><div><span class="eyebrow">${chapterTitle}</span><h1>${z.name}</h1></div></div>
+      <div class="location"><span class="location-symbol">${icon('lantern')}</span><div><span class="eyebrow">${chapterTitle}</span><h1>${z.name}</h1></div></div>
       <aside class="quest-widget" aria-label="當前目標">
         <div class="quest-heading"><span>${icon('star')} ${dawn ? '旅途餘韻' : '當前目標'}</span></div>
         <p>${esc(objective(state))}</p>
@@ -528,13 +530,31 @@ function hud() {
 function navButton(name: string, label: string, next: Tab, shortcut: string) { return `<button class="nav-icon" data-action="menu:${next}" aria-label="${label}" title="${label} (${shortcut})">${icon(name)}<small>${shortcut}</small></button>`; }
 function titleScreen() {
   const available = !!loadGame(storage, 'auto').state || !!loadGame(storage, 'manual').state;
-  return `<div class="title-shade"></div><header class="title-header"><a class="wordmark" href="#" aria-label="星燈紀行首頁">${icon('star')}<span>STARLIGHT STUDIO</span></a><span class="edition">AN ORIGINAL HD–2D ADVENTURE <i></i> VOL. 01</span>${button(icon('gear'), 'menu:settings', 'nav-icon')}</header>
-  <main class="title-content"><div class="title-kicker"><span></span> 在長夜盡頭，與光重逢</div><div class="title-seal">星を灯す旅</div><h1>星燈<span>紀行</span><i>✧</i></h1><p class="title-english">STARLIGHT CHRONICLE</p><div class="title-divider"><i></i>✦<i></i></div><p class="title-description">有些光，來自遙遠的星辰。<br>有些光，來自我們不曾遺忘的彼此。</p><div class="title-actions">${button(`${icon('star')}<span>啟程<span class="button-en">BEGIN YOUR JOURNEY</span></span>${icon('arrow')}`, 'new', 'primary-button')}${button(`開始中篇 ${icon('arrow')}`, 'new:medium', 'continue-button medium-entry')}${button(`繼續旅程 ${icon('arrow')}`, 'menu:saves', 'continue-button', !available)}</div><div class="title-meta"><span>單人冒險</span><i></i><span>回合制戰鬥</span><i></i><span>繁體中文</span></div></main>
-  <div class="scene-caption"><span class="caption-line"></span><span>序章</span><h2>霧鐘村</h2><p>每一段偉大的旅程，都從一盞小小的燈開始。</p><small>01 / 04 — THE VILLAGE OF MISTBELLS</small></div><footer class="title-footer"><span>© 2026 STARLIGHT CHRONICLE</span><span>${icon('sound')} 建議配戴耳機，聆聽星光的聲音</span><button data-action="menu:help">操作指南 ${icon('arrow')}</button></footer>`;
+  return `<div class="title-shade"></div>
+  <header class="title-header"><div class="wordmark">${icon('lantern')}<span>單人回合制 RPG</span></div>${button(icon('gear'), 'menu:settings', 'nav-icon')}</header>
+  <main class="title-content">
+    <h1>星燈紀行</h1><p class="title-english">STARLIGHT CHRONICLE</p>
+    <div class="title-divider" aria-hidden="true">${icon('star')}</div>
+    <p class="title-description">有些光，來自遙遠的星辰。<br>有些光，來自我們不曾遺忘的彼此。</p>
+    <div class="title-actions">
+      ${button(`${icon('lantern')}<span>啟程<span class="button-en">BEGIN YOUR JOURNEY</span></span>${icon('arrow')}`, 'new', 'primary-button')}
+      ${button(`開始中篇 ${icon('arrow')}`, 'new:medium', 'continue-button medium-entry')}
+      ${button(`繼續旅程 ${icon('arrow')}`, 'menu:saves', 'continue-button', !available)}
+    </div>
+  </main>
+  <div class="scene-caption"><span class="eyebrow">序章</span><h2>${ZONES.village.name}</h2><small>${ZONES.village.subtitle}</small></div>
+  <footer class="title-footer"><span>© 2026 STARLIGHT CHRONICLE</span><button data-action="menu:help">操作指南 ${icon('arrow')}</button></footer>`;
 }
+const speakerArt = new Map([
+  ['莉恩', 'lien'], ['洛恩', 'loren'], ['守燈婆婆', 'elder'], ['米菈', 'child'], ['行腳商人', 'merchant'],
+  ['候車母親', 'station-mother'], ['桑榆', 'station-chief'], ['桑榆的回傳', 'station-chief'],
+  ['伊朵', 'highland-workshop'], ['亞岑', 'highland-injured'], ['芙蕾', 'archive-host'],
+  ['寄存者甲', 'archive-reader-1'], ['寄存者乙', 'archive-reader-2'], ['寄存者丙', 'archive-reader-3'],
+  ['鄰居', 'village-neighbor'],
+]);
 function dialoguePanel() {
   if (!dialogue) return ''; const [speaker, text] = dialogue.lines[dialogue.index];
-  const kind = ({ '莉恩': 'lien', '洛恩': 'loren', '守燈婆婆': 'elder', '米菈': 'child', '行腳商人': 'merchant' } as Record<string, string>)[speaker];
+  const kind = speakerArt.get(speaker);
   const end = dialogue.index === dialogue.lines.length - 1;
   const next = end && dialogue.choices
     ? dialogue.choices.labels.map((label, index) => button(esc(label), `dialogue:choice:${index}`, 'dialogue-next')).join('')
@@ -547,7 +567,7 @@ function bridgeIntro() {
 function modalPanel() {
   const tabs: [Tab, string, string][] = [['map','區域地圖','pin'], ['journal', '旅途日誌', 'book'], ['party', '旅人隊伍', 'people'], ['items', '旅途行囊', 'bag'], ['saves', '星燈記錄', 'save'], ['settings', '旅途設定', 'gear'], ['help', '操作指南', 'star']];
   const title = tab === 'shop' ? '行腳商人的小鋪' : tabs.find(t => t[0] === tab)![1];
-  return `<div class="modal-scrim"></div><section class="menu-panel" role="dialog" aria-modal="true" aria-label="${title}"><aside class="menu-sidebar"><div class="menu-brand">${icon('star')}<span>星燈紀行<small>TRAVELER'S COMPANION</small></span></div>${tabs.map(([key, label, symbol]) => button(`${icon(symbol)} ${label}`, `tab:${key}`, tab === key ? 'tab active' : 'tab', previousMode === 'title' && ['map', 'journal', 'party', 'items'].includes(key))).join('')}<div class="sidebar-bottom">${icon('moon')}<span>願微光，指引歸途</span></div></aside><div class="menu-main"><header class="menu-heading"><div><span class="eyebrow">THE JOURNEY WITHIN</span><h2>${title}</h2></div>${button(icon('close'), 'close', 'close-button')}</header><div class="menu-scroll">${menuContent()}</div><footer class="menu-footer"><span>${icon('star')} ${state.gold} 星幣</span><span>旅途時間 ${playTime()}</span><span><kbd>Esc</kbd> 返回</span></footer></div></section>`;
+  return `<div class="modal-scrim"></div><section class="menu-panel" role="dialog" aria-modal="true" aria-label="${title}"><aside class="menu-sidebar"><div class="menu-brand">${icon('star')}<span>星燈紀行</span></div>${tabs.map(([key, label, symbol]) => button(`${icon(symbol)} ${label}`, `tab:${key}`, tab === key ? 'tab active' : 'tab', previousMode === 'title' && ['map', 'journal', 'party', 'items'].includes(key))).join('')}<div class="sidebar-bottom">${icon('moon')}<span>願微光，指引歸途</span></div></aside><div class="menu-main"><header class="menu-heading"><div><h2>${title}</h2></div>${button(icon('close'), 'close', 'close-button')}</header><div class="menu-scroll">${menuContent()}</div><footer class="menu-footer"><span>${icon('star')} ${state.gold} 星幣</span><span>旅途時間 ${playTime()}</span><span><kbd>Esc</kbd> 返回</span></footer></div></section>`;
 }
 function menuContent(): string {
   if (tab === 'map') return `<p class="menu-intro">${objective(state)}</p><div data-map-view class="large-map">${mapView(state,world)}</div><div class="map-legend">● 玩家　<span>★ 主線</span>　<span class="map-npc">◆ 村民</span>　<span class="map-shop">■ 商店</span>　<span class="map-lamp">● 星燈</span><br>北方朝上；道路與障礙完整顯示。收藏物接近四個單位後揭露。</div>${isMedium(state) ? travelMenu() : ''}<ul class="map-points">${mapPoints(state).map(o=>`<li>${mapSymbol(o.kind, o.id, getObjective(state).targetIds.includes(o.id))} ${esc(o.label)}${has(state,o.id)?'（已讀）':''}</li>`).join('')}</ul>`;
@@ -556,7 +576,7 @@ function menuContent(): string {
   if (tab === 'journal') {
     return `<div class="chapter-card"><span class="eyebrow">主線 · ${progress()}% COMPLETE</span><h3>尋回散落的星火</h3><p>${objective(state)}</p><div class="progress-track"><i style="width:${progress()}%"></i></div></div><h3 class="section-label">旅途的足跡</h3><div class="chapter-list">${ZONE_ORDER.map((id, i) => `<div class="chapter-row ${id === state.zone ? 'current' : ''}"><span class="chapter-number">0${i + 1}</span><div><h4>${ZONES[id].name}</h4><p>${i === 0 ? '與婆婆交談，在北門解開鐘譜。' : i === 1 ? '讀營地根紋碑，按序喚醒林燈，再挑戰守橋樹靈。' : i === 2 ? '依入口分流尺穩定兩道水閘，拾回西北方的記憶。' : '讀觀星碑，調整三面星盤讓光束交會。'}</p></div><span>${id === state.zone ? '旅途之中' : (ZONE_ORDER as readonly ZoneId[]).indexOf(state.zone) > i || has(state, 'ending') ? '已抵達' : '等待探訪'}</span></div>`).join('')}</div><h3 class="section-label">拾回的記憶 · ${Object.keys(LORE).filter(id => has(state, id)).length} / 8</h3><div class="lore-notes">${Object.entries(LORE).filter(([id]) => has(state, id)).map(([, note]) => `<details><summary>${note.title}</summary>${note.lines.map(([speaker, text]) => `<p><b>${speaker}</b>${text}</p>`).join('')}</details>`).join('') || '<p class="footnote">沿途的碑文、信紙與舊物，藏著山城曾經的故事。</p>'}</div><h3 class="section-label">沿途的約定</h3>${bridgeJournal()}<div class="sidequest"><h4>${has(state, 'herb-reward') ? '✓' : '◇'} 一捧月露</h4><p>在森林採集三株月露草，帶回霧鐘村給守燈婆婆。${[1, 2, 3].filter(n => has(state, `herb-${n}`)).length} / 3</p><small>獎勵：月露護符（生命 +25）、月露藥 ×3</small></div><div class="sidequest"><h4>${has(state, 'pendant-reward') ? '✓' : '◇'} 水底的風鈴</h4><p>在沉星水道東南方尋找銀色墜飾，交給村裡的米菈。</p><small>獎勵：記憶石（魔力 +10）、星泉水 ×3、甦醒之羽 ×1</small></div>`;
   }
-  if (tab === 'party') return `<div class="party-cards">${state.party.map(h => `<article class="party-card"><div class="character-art ${h.id}">${portrait(h.id)}<span>0${h.id === 'lien' ? '1' : '2'}</span></div><div class="character-info"><span class="eyebrow">${h.id === 'lien' ? 'THE LANTERN KEEPER' : 'THE FORGOTTEN KNIGHT'}</span><h3>${h.name}<small>${h.id === state.leaderId ? '帶隊 · ' : ''}Lv. ${partyLevel(state)}</small></h3><p>${h.id === 'lien' ? '「只要還有人記得，燈火就不會熄滅。」' : '「這一次，我不會再獨自守燈。」'}</p><div class="stat-grid"><span>生命 <b>${h.hp} / ${h.maxHp}</b></span><span>魔力 <b>${h.mp} / ${h.maxMp}</b></span><span>攻擊 <b>${h.atk}</b></span><span>防禦 <b>${h.def}</b></span><span>速度 <b>${h.speed}</b></span><span>經驗 <b>${state.xp}</b></span></div><div class="equipment"><span>${icon('sword')} ${has(state, 'weapon-upgrade') ? '星火強化 · ' : ''}${h.id === 'lien' ? '守燈人的提燈' : '刻名的古劍'}</span><span>${icon('star')} ${h.accessory === 'moon-charm' ? '月露護符 · HP +25' : h.accessory === 'memory-charm' ? '記憶石 · MP +10' : '尚未裝備飾品'}</span></div><h4 class="section-label">旅人技能</h4>${SKILLS.filter(s => s.owner === h.id).map(s => `<div class="skill-row ${s.level > partyLevel(state) ? 'locked' : ''}"><span>${s.name}<small>${s.description}</small></span><b>${s.level > partyLevel(state) ? `Lv.${s.level} 解鎖` : `${s.cost} MP`}</b></div>`).join('')}</div></article>`).join('')}</div>`;
+  if (tab === 'party') return `<div class="party-cards">${state.party.map(h => `<article class="party-card"><div class="character-art ${h.id}">${portrait(h.id)}</div><div class="character-info"><span class="eyebrow">${h.id === 'lien' ? 'THE LANTERN KEEPER' : 'THE FORGOTTEN KNIGHT'}</span><h3>${h.name}<small>${h.id === state.leaderId ? '帶隊 · ' : ''}Lv. ${partyLevel(state)}</small></h3><p>${h.id === 'lien' ? '「只要還有人記得，燈火就不會熄滅。」' : '「這一次，我不會再獨自守燈。」'}</p><div class="stat-grid"><span>生命 <b>${h.hp} / ${h.maxHp}</b></span><span>魔力 <b>${h.mp} / ${h.maxMp}</b></span><span>攻擊 <b>${h.atk}</b></span><span>防禦 <b>${h.def}</b></span><span>速度 <b>${h.speed}</b></span><span>經驗 <b>${state.xp}</b></span></div><div class="equipment"><span>${icon('sword')} ${has(state, 'weapon-upgrade') ? '星火強化 · ' : ''}${h.id === 'lien' ? '守燈人的提燈' : '刻名的古劍'}</span><span>${icon('star')} ${h.accessory === 'moon-charm' ? '月露護符 · HP +25' : h.accessory === 'memory-charm' ? '記憶石 · MP +10' : '尚未裝備飾品'}</span></div><h4 class="section-label">旅人技能</h4>${SKILLS.filter(s => s.owner === h.id).map(s => `<div class="skill-row ${s.level > partyLevel(state) ? 'locked' : ''}"><span>${s.name}<small>${s.description}</small></span><b>${s.level > partyLevel(state) ? `Lv.${s.level} 解鎖` : `${s.cost} MP`}</b></div>`).join('')}</div></article>`).join('')}</div>`;
   if (tab === 'items' || tab === 'shop') return `<p class="menu-intro">${tab === 'shop' ? '「東西不多，但每一件都能讓旅途安心些。星燈旁休息免費，別忘了！」' : '留給漫漫長夜的一點準備。選擇道具，再選擇使用的旅人。'}</p><div class="inventory-list">${(Object.keys(ITEMS) as ItemId[]).map(id => `<article class="inventory-item"><div class="item-icon ${id}">${icon(id === 'revive' ? 'leaf' : id === 'ether' ? 'star' : 'bag')}</div><div><h3>${ITEMS[id].name}<small>持有 ${state.inventory[id]}</small></h3><p>${ITEMS[id].description}</p></div><div class="item-actions">${tab === 'shop' ? button(`購買 · ${ITEMS[id].price} 星幣`, `buy:${id}`, 'outline-button', state.gold < ITEMS[id].price) : state.party.map(h => button(`給${h.name}`, `use:${id}:${h.id}`, 'outline-button', state.inventory[id] <= 0 || (id === 'revive' ? h.hp > 0 : h.hp <= 0 || (id === 'potion' ? h.hp === h.maxHp : h.mp === h.maxMp)))).join('')}</div></article>`).join('')}</div>${tab === 'shop' ? '<p class="footnote">旅途的小提醒：守橋菁英也會留下補給。藍色星燈可以完全恢復生命與魔力。</p>' : ''}`;
   if (tab === 'saves') return `<p class="menu-intro">把此刻的星光，好好收藏。每個欄位獨立保存；自動記錄不會覆蓋手動記錄。</p>${(['auto', 'manual'] as const).map(slot => {
     const loaded = loadGame(storage, slot); const s = loaded.state;
@@ -683,7 +703,7 @@ function endingPanel() {
   const scenes = EPILOGUE_ZONES.filter((_, index) => has(state, `E0${index + 1}`)).length;
   const pending = medium && scenes < EPILOGUE_ZONES.length;
   const quests = ['herb-reward', 'pendant-reward', 'bridge-reward', ...(medium ? MEDIUM_QUESTS.map(quest => quest.id) : [])];
-  return `<div class="ending-scrim"></div><section class="ending-panel"><span class="ending-star">✧</span><span class="eyebrow">THE LIGHT WE CARRY</span><h1>${pending && scenes ? '返鄉尾聲' : '長夜盡頭，<br>是我們的黎明。'}</h1><p>${pending && scenes ? `下一站 · ${ZONES[EPILOGUE_ZONES[scenes]].name}` : '你找回了散落的星火，<br>也讓一座山城，重新記起了彼此。'}</p><div class="ending-stats"><span><b>${state.defeated.length}</b> 次並肩作戰</span><span><b>${quests.filter(f => has(state, f)).length}</b> 個完成的約定</span><span><b>${Math.floor(state.playSeconds / 60)}</b> 分鐘的旅程</span></div>${pending ? button(`${scenes ? '繼續返鄉尾聲' : '開始返鄉尾聲'} ${icon('arrow')}`, 'epilogue', 'primary-button') : button(`回到星光下 ${icon('arrow')}`, 'ending:explore', 'primary-button')}<small>${pending ? '每一站的進度都會自動保存。' : '通關進度已保存，可繼續探索與完成支線。'}</small></section>`;
+  return `<div class="ending-scrim"></div><section class="ending-panel"><span class="ending-star">${icon('star')}</span><h1>${pending && scenes ? '返鄉尾聲' : '長夜盡頭，<br>是我們的黎明。'}</h1><p>${pending && scenes ? `下一站 · ${ZONES[EPILOGUE_ZONES[scenes]].name}` : '你找回了散落的星火，<br>也讓一座山城，重新記起了彼此。'}</p><div class="ending-stats"><span><b>${state.defeated.length}</b> 次並肩作戰</span><span><b>${quests.filter(f => has(state, f)).length}</b> 個完成的約定</span><span><b>${Math.floor(state.playSeconds / 60)}</b> 分鐘的旅程</span></div>${pending ? button(`${scenes ? '繼續返鄉尾聲' : '開始返鄉尾聲'} ${icon('arrow')}`, 'epilogue', 'primary-button') : button(`回到星光下 ${icon('arrow')}`, 'ending:explore', 'primary-button')}<small>${pending ? '每一站的進度都會自動保存。' : '通關進度已保存，可繼續探索與完成支線。'}</small></section>`;
 }
 function puzzlePanel() {
   if (!activePuzzle) return '';
@@ -706,6 +726,7 @@ function puzzlePanel() {
 }
 function render() {
   ui.innerHTML = mode === 'title' ? titleScreen() : mode === 'puzzle' ? puzzlePanel() : mode === 'battle' ? (dialogue ? dialoguePanel() : battlePanel()) : `${dialogue?.atBridge ? bridgeIntro() : previousMode === 'title' && mode === 'pause' ? titleScreen() : hud()}${mode === 'dialogue' ? dialoguePanel() : mode === 'pause' ? modalPanel() : mode === 'ending' ? endingPanel() : ''}`;
+  ui.style.setProperty('--chapter-tint', ZONES[state.zone].color);
   game.className = `mode-${mode}${state.settings.reducedMotion ? ' reduced-motion' : ''}`;
   nearby = '';
   ui.querySelectorAll<HTMLButtonElement>('button').forEach(b => { if (!b.hasAttribute('aria-label') && !b.textContent?.trim()) b.setAttribute('aria-label', b.dataset.action === 'close' ? '關閉選單' : '開啟設定'); });
@@ -820,7 +841,7 @@ function updateMarkers(nearest: Interactable | undefined) {
   if (layer.dataset.markers !== signature) {
     layer.dataset.markers = signature;
     layer.innerHTML = candidates.map(({ object, active, main }) => {
-      const symbol = main ? 'star' : object.id === 'merchant' ? 'bag' : object.kind === 'npc' ? 'chat' : object.kind === 'lamp' ? 'sun' : 'pin';
+      const symbol = main ? 'star' : object.id === 'merchant' ? 'bag' : object.kind === 'npc' ? 'chat' : object.kind === 'lamp' ? 'lantern' : 'pin';
       return `<div class="world-marker${main ? ' is-main' : ''}${active ? ' is-active' : ''}" data-marker="${object.id}">${icon(symbol)}<span>${esc(object.label)}</span></div>`;
     }).join('');
   }
@@ -888,7 +909,7 @@ function frame(now: number) {
   if (mode === 'explore' && !document.hidden) updateMarkers(nearest);
 }
 void loadHeroAtlases().then(() => {
-  for (const kind of ['lien', 'loren', 'elder', 'merchant', 'child', ...Object.keys(ENEMIES)]) {
+  for (const kind of ['lien', 'loren', ...Object.keys(NPC_ART), ...Object.keys(ENEMIES)]) {
     const texture = pixelTexture(kind, 0, 0, true);
     portraits[kind] = texture.image.toDataURL();
     texture.dispose();

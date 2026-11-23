@@ -14,7 +14,7 @@ async page => {
   const ready=()=>page.waitForFunction(()=>!document.querySelector('.battle-thinking'));
   const act=async action=>{await page.evaluate(action=>window.__starlight.action(action),action);await ready();};
   await page.evaluate(()=>{window.__starlight.fixture('forest',{ready:true});window.__starlight.encounter('f1');});await ready();
-  await page.getByRole('button',{name:'技能 運用星火之力'}).click();await page.getByRole('button',{name:/^燈火 /}).click();await page.getByRole('button',{name:/^露珠軟泥 HP/}).click();
+  await page.locator('[data-action="battle:skills"]').click();await page.locator('[data-action="skill:ember"]').click();await page.locator('[data-action="target:enemy-0"]').click();
   await page.evaluate(()=>window.__starlight.action({kind:'attack'})); // A second action during playback must be ignored.
   await page.waitForTimeout(140);await page.screenshot({path:'output/playwright/combat-cast.png'});await ready();
   const fire=await page.evaluate(()=>window.__starlight.getBattle());if(fire.heroes[0].mp!==25||fire.enemies[0].hp!==21)throw new Error('Playback allowed duplicate action or wrong damage');

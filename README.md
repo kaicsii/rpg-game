@@ -64,6 +64,7 @@ GitHub Pages 由 `.github/workflows/deploy.yml` 部署：推送 `main` 後會自
 - `src/game.ts`：不依賴渲染的戰鬥、進度、機關與存檔邏輯。
 - `src/puzzles.ts`：關卡線索、解答規則和機關狀態。
 - `src/world.ts`：立體場景、像素動畫、碰撞、光影、粒子與攝影機。
+- `src/art.ts`、`src/sprites.ts`：區域與地圖共用配色、星燈材質、像素角色與敵人。
 - `src/main.ts`：遊戲狀態、互動、對話、HTML 選單與鍵盤操作。
 - `src/audio.ts`：原創五聲音階旋律與合成音效。
 - `src/game.test.ts`：Node test runner 的確定性測試。
@@ -72,7 +73,7 @@ GitHub Pages 由 `.github/workflows/deploy.yml` 部署：推送 `main` 後會自
 
 ## 素材與授權
 
-莉恩與洛恩的原創人設使用內建 imagegen 生成，再依人設轉為四方向像素圖。高清稿、像素原圖與提示詞摘要保存在 [角色美術資料夾](art/characters/README.md)。遊戲載入兩張共約 68 KB 的透明圖集，以最近鄰取樣顯示每個 52 × 64 像素的動作格。村民、敵人、場景與音效仍由本專案程式產生。音訊在玩家第一次操作後才啟動。
+莉恩與洛恩的原創人設使用內建 imagegen 生成，再依人設轉為四方向像素圖。高清稿、像素原圖與提示詞摘要保存在 [角色美術資料夾](art/characters/README.md)。遊戲載入兩張共約 68 KB 的透明圖集，以最近鄰取樣顯示每個 52 × 64 像素的動作格。村民與敵人使用分層像素圖形繪製，並與對話、行動列共用。八個區域沿用靛藍夜色、黃銅燈具與青色星燈，各有自己的地面材質和照明色調。場景與音效由本專案程式產生。音訊在玩家第一次操作後才啟動。
 
 字體採 Google Fonts 的 Noto Serif TC 與 Noto Sans TC（SIL Open Font License），無網路時由本機 serif / sans-serif 備援。圖示為內嵌原創 SVG。Three.js 使用 MIT 授權；其他依賴的授權見各套件。
 
