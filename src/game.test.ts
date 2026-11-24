@@ -1,16 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ZONES, ALL_ZONES, SKILLS, type GameState, type Encounter } from './data';
-import { newGame, levelFor, partyLevel, areaObjects, heroStats, damage, startBattle, resolveAction, advanceEnemies, currentActor, finishBattle, grantFlag, bridgeClueFlag, completeBridgeQuest, revealedWeaknesses, enemyThreat, saveGame, loadGame, validSave, refreshStats, healParty, puzzleSolved, canLeave, travel, applyItem, type Battle, type Action } from './game';
-import { MEDIUM_CHAPTERS, MEDIUM_QUESTS } from './medium-content';
-import { finishMediumAction, finishQuestStop, mediumDestination, mediumLines, mediumProgress, mediumSteps, unlockedRegions } from './medium';
+import { ZONES, ALL_ZONES, ENEMIES, SKILLS, type GameState, type Encounter } from './data';
+import { newGame, levelFor, partyLevel, areaObjects, heroStats, damage, startBattle, resolveAction, advanceEnemies, currentActor, finishBattle, grantFlag, bridgeClueFlag, completeBridgeQuest, revealedWeaknesses, enemyThreat, saveGame, loadGame, validSave, refreshStats, healParty, getObjective, migrateSave, applyItem, type Battle, type Action } from './game';
+import { MEDIUM_CHAPTERS, MEDIUM_POINTS, MEDIUM_QUESTS } from './medium-content';
+import { finishMediumAction, finishQuestStop, finishMediumStep, mediumDestination, mediumLines, mediumProgress, mediumSteps, unlockedRegions } from './medium';
 import { boardSaved, boardValues, checkPuzzleBoard, choosePuzzleValue, nextForestBeacon, PUZZLE_BOARDS, turnValve, valveLevel, waterDrained } from './puzzles';
+import { dialogueArtKey, ECLIPSE_FORM, enemyArtKey, NPC_ART, TRAVELER_ART } from './character-art';
+import { enemyAttackPose, enemyAttackTiming, enemyMotions, enemyPose } from './enemy-motion';
 const fixture = (id: string): Encounter => Object.values(ZONES).flatMap(z => z.encounters).find(e => e.id === id)!;
 const ready = (xp = 160) => { const s = newGame(); s.xp = xp; refreshStats(s); healParty(s); return s; };
 
-test('中篇主線只靠必要戰鬥可通過全部區域，並保存新增的區域與記憶', () => {
+test('正式主線只靠必要戰鬥可通過八區，並保存區域與記憶', () => {
   let s = newGame();
-  s.flags.push('medium-campaign');
   assert.deepEqual(unlockedRegions(s), ['village']);
   const encounters = [];
   for (const [index, chapter] of MEDIUM_CHAPTERS.entries()) {
@@ -42,6 +43,7 @@ test('中篇主線只靠必要戰鬥可通過全部區域，並保存新增的�
     }
   }
   assert.equal(encounters.length, 8);
+  assert.equal(partyLevel(s), 9);
   assert.equal(mediumProgress(s), 54);
   assert.ok(s.flags.includes('ending'));
   s.discoveredObjectIds.push('L24');
@@ -51,10 +53,10 @@ test('中篇主線只靠必要戰鬥可通過全部區域，並保存新增的�
   const storage = { getItem: (key: string) => saves.get(key) ?? null, setItem: (key: string, data: string) => { saves.set(key, data); } };
   saveGame(storage, 'auto', s);
   assert.deepEqual(loadGame(storage, 'auto').state, s);
-  assert.equal(validSave({ ...s, flags: [] }), false);
+  assert.equal(validSave({ ...s, discoveredObjectIds: ['unknown'] }), false);
 });
 
-test('中篇跨區支線依序交付，獎勵只給一次', () => {
+test('跨區支線依序交付，獎勵只給一次', () => {
   const s = newGame();
   const quest = MEDIUM_QUESTS[0];
   const [a, b, c] = quest.stops;
@@ -128,15 +130,27 @@ test('battle and side quest rewards cannot be collected twice', () => {
   const reward = (d: GameState) => { d.gold += 30; };
   const first = grantFlag(s, 'quest', reward); assert.equal(grantFlag(first, 'quest', reward).gold, first.gold);
 });
-test('level caps at five, equipment increases maximum stats without reviving', () => {
-  assert.equal(levelFor(9999), 5); const s = newGame(); s.party[0].hp = 0; s.party[0].accessory = 'moon-charm'; refreshStats(s);
+test('level caps at nine, equipment increases maximum stats without reviving', () => {
+  assert.equal(levelFor(9999), 9); const s = newGame(); s.party[0].hp = 0; s.party[0].accessory = 'moon-charm'; refreshStats(s);
   assert.equal(s.party[0].hp, 0); assert.equal(s.party[0].maxHp, 117);
 });
-test('puzzles and gate conditions persist, travel is reversible', () => {
-  let s = newGame(); assert.ok(canLeave(s)); s.flags.push('main-quest'); assert.match(canLeave(s)!, /鐘譜/);
-  s.flags.push('puzzle-bells'); assert.equal(canLeave(s), null); s = travel(s, 1); assert.equal(s.zone, 'forest');
-  Object.assign(s.mechanisms, { 'beacon-1': 1, 'beacon-2': 1, 'beacon-3': 1 }); assert.equal(puzzleSolved(s), true); assert.ok(canLeave(s));
-  s.defeated.push('forest-elite'); assert.equal(canLeave(s), null); s = travel(s, 1); assert.equal(s.zone, 'waterway'); s = travel(s, -1); assert.equal(s.zone, 'forest'); assert.equal(puzzleSolved(s), true);
+test('北門等村民與鐘譜完成後才開放，開放後可往返回村', () => {
+  const s = newGame();
+  const chapters = MEDIUM_CHAPTERS[0].groups;
+  assert.deepEqual(getObjective(s).targetIds, ['opening']);
+  for (const step of chapters.slice(0, 2).flat()) finishMediumAction(s, step);
+  assert.deepEqual(getObjective(s).targetIds, ['merchant', 'child']);
+  finishMediumAction(s, chapters[2][1]);
+  assert.deepEqual(getObjective(s).targetIds, ['merchant']);
+  finishMediumAction(s, chapters[2][0]);
+  finishMediumAction(s, chapters[3][0]);
+  assert.equal(mediumDestination(s, 'forest-exit'), undefined);
+  const bells = PUZZLE_BOARDS[0];
+  bells.answer.forEach((value, index) => choosePuzzleValue(s, bells, index, value));
+  assert.equal(checkPuzzleBoard(s, bells), undefined);
+  finishMediumAction(s, chapters[4][0]);
+  assert.equal(mediumDestination(s, 'forest-exit'), 'forest');
+  assert.equal(mediumDestination(s, 'forest-back'), 'village');
 });
 test('所有解謎面板拒絕未完成或錯誤答案，只在提交正解後鎖定並可續讀', () => {
   const s = newGame();
@@ -166,10 +180,8 @@ test('野外機關接受舊存檔，水閘需同時分流並能修正誤設', ()
   assert.equal(valveLevel(s, 'valve-1'), 1);
   turnValve(s, 'valve-2');
   assert.equal(valveLevel(s, 'valve-2'), 1);
-  assert.equal(puzzleSolved(s), false);
   turnValve(s, 'valve-2');
   assert.equal(waterDrained(s), true);
-  assert.equal(puzzleSolved(s), true);
   turnValve(s, 'valve-2');
   assert.equal(valveLevel(s, 'valve-2'), 2);
 });
@@ -177,7 +189,7 @@ test('save roundtrip, version check, corrupt slot isolation, blocked storage', (
   const map = new Map<string, string>(); const storage = { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => { map.set(key, value); } };
   const s = ready(); assert.equal(saveGame(storage, 'manual', s), null); assert.deepEqual(loadGame(storage, 'manual').state, s);
   storage.setItem('starlight:auto', '{broken'); assert.ok(loadGame(storage, 'auto').error); assert.deepEqual(loadGame(storage, 'manual').state, s);
-  assert.equal(validSave({ ...s, version: 2 }), false); assert.equal(validSave({ ...s, position: { x: null, z: 0 } }), false); assert.equal(validSave({ ...s, inventory: { potion: -1 } }), false);
+  assert.equal(validSave({ ...s, version: 3 }), false); assert.equal(validSave({ ...s, position: { x: null, z: 0 } }), false); assert.equal(validSave({ ...s, inventory: { potion: -1 } }), false);
   const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
   assert.ok(saveGame(blocked, 'auto', s)); assert.ok(loadGame(blocked, 'auto').error);
 });
@@ -199,35 +211,6 @@ function autoplay(s: GameState, encounter: Encounter): Battle {
   }
   return b;
 }
-test('complete campaign: all twelve encounters winnable with natural levels and lamp rests', () => {
-  let s = newGame(); s.flags.push('main-quest'); s.xp += 10;
-  for (const zone of Object.values(ZONES)) {
-    s.zone = zone.id;
-    if (zone.id === 'forest') s.xp += 12;
-    if (zone.id === 'waterway') s.xp += 20;
-    if (zone.id === 'tower') s.xp += 24;
-    refreshStats(s);
-    for (const e of zone.encounters) {
-      healParty(s); const b = autoplay(s, e); assert.equal(b.status, 'victory', `encounter ${e.id}`); s = finishBattle(s, b);
-    }
-  }
-  assert.equal(s.defeated.length, 12); assert.equal(levelFor(s.xp), 5); assert.ok(s.defeated.includes('eclipse'));
-});
-test('required path reaches level five without optional encounter grinding', () => {
-  const s = newGame(); const xp = 10 + 12 + ENEMY_XP('forest-elite') + 20 + ENEMY_XP('water-elite') + 24 + ENEMY_XP('eclipse');
-  assert.equal(levelFor(xp), 5); assert.equal(s.xp, 0);
-});
-function ENEMY_XP(id: string) { return ({ 'forest-elite': 30, 'water-elite': 40, eclipse: 50 } as Record<string, number>)[id]; }
-
-test('mandatory-only campaign is winnable without optional encounters', () => {
-  let s = newGame(); s.flags.push('main-quest'); s.xp = 10;
-  for (const [id, questXp] of [['forest-elite', 12], ['water-elite', 20], ['eclipse', 24]] as const) {
-    s.xp += questXp; refreshStats(s); healParty(s);
-    const b = autoplay(s, fixture(id)); assert.equal(b.status, 'victory', `main path ${id}`); s = finishBattle(s, b);
-  }
-  assert.equal(levelFor(s.xp), 5);
-});
-
 test('combat events identify the attacker, target and visual/sound effect', () => {
   let b = startBattle(ready(), fixture('forest-elite'));
   const fire = resolveAction(b, { kind: 'skill', id: 'ember' }, 5);
@@ -236,36 +219,127 @@ test('combat events identify the attacker, target and visual/sound effect', () =
   const sword = resolveAction(b, { kind: 'attack' }, 5);
   assert.equal(sword.events.find(e => e.type === 'damage')?.effect, 'slash');
   const enemy = advanceEnemies(sword.battle).events.find(e => e.type === 'damage');
-  assert.equal(enemy?.source, 'enemy-0'); assert.ok(['lien', 'loren'].includes(enemy?.target ?? ''));
+  assert.equal(enemy?.source, 'enemy-0'); assert.equal(enemy?.enemyMove, 'strike'); assert.ok(['lien', 'loren'].includes(enemy?.target ?? ''));
   b = startBattle(ready(), fixture('forest-elite')); b.resonance = 100;
   assert.equal(resolveAction(b, { kind: 'resonance' }, 5).events.find(e => e.type === 'damage')?.effect, 'resonance');
   b.heroes[1].hp -= 20;
   assert.equal(resolveAction(b, { kind: 'skill', id: 'heal', target: 'loren' }, 5).events.find(e => e.type === 'heal')?.effect, 'heal');
 });
 
-test('legacy version one saves migrate without altering progress or accepting invalid explicit fields', async () => {
-  const {migrateSave}=await import('./game');
-  const old:any=newGame(); delete old.leaderId; delete old.discoveredObjectIds; delete old.settings.autoStopLowHp; old.gold=87;
-  const migrated=migrateSave(old) as GameState;
-  assert.equal(migrated.leaderId,'lien'); assert.deepEqual(migrated.discoveredObjectIds,[]); assert.equal(migrated.settings.autoStopLowHp,true); assert.equal(migrated.gold,87); assert.ok(validSave(migrated)); assert.equal(old.leaderId,undefined);
-  assert.equal(validSave(migrateSave({...old,leaderId:'unknown'})),false);
-  assert.equal(validSave(migrateSave({...old,discoveredObjectIds:['not-an-object']})),false);
-  assert.equal(validSave(migrateSave({...old,settings:{...old.settings,autoStopLowHp:null}})),false);
-  const saved=newGame();saved.leaderId='loren';saved.discoveredObjectIds=['herb-1'];saved.settings.autoStopLowHp=false;
-  assert.deepEqual(migrateSave(saved),saved);
+test('舊存檔預設值相容，已存在的欄位仍要驗證', () => {
+  const old = { ...newGame(), version: 1, gold: 87 };
+  const { leaderId, discoveredObjectIds, settings, ...withoutFields } = old;
+  const { autoStopLowHp, ...oldSettings } = settings;
+  const legacy = { ...withoutFields, settings: oldSettings };
+  const migrated = migrateSave(legacy) as GameState;
+  assert.equal(migrated.leaderId, 'lien');
+  assert.deepEqual(migrated.discoveredObjectIds, []);
+  assert.equal(migrated.settings.autoStopLowHp, true);
+  assert.equal(migrated.gold, 87);
+  assert.ok(validSave(migrated));
+  assert.equal(validSave(migrateSave({ ...legacy, leaderId: 'unknown' })), false);
+  assert.equal(validSave(migrateSave({ ...legacy, discoveredObjectIds: ['not-an-object'] })), false);
+  assert.equal(validSave(migrateSave({ ...legacy, settings: { ...oldSettings, autoStopLowHp: null } })), false);
+  const saved = newGame();
+  saved.leaderId = 'loren';
+  saved.discoveredObjectIds = ['herb-1'];
+  saved.settings.autoStopLowHp = false;
+  assert.deepEqual(migrateSave(saved), saved);
 });
-test('objective markers follow main progression, travel direction, mechanisms and ending', async()=>{
-  const {getObjective}=await import('./game');const s=newGame();
-  assert.deepEqual(getObjective(s).targetIds,['elder']);s.flags.push('main-quest');assert.deepEqual(getObjective(s).targetIds,['forest-exit']);
-  s.zone='forest';assert.deepEqual(getObjective(s).targetIds,['forest-roots','beacon-1','beacon-2','beacon-3']);s.mechanisms={'beacon-1':1,'beacon-2':1,'beacon-3':1};assert.deepEqual(getObjective(s).targetIds,['forest-elite']);
-  s.defeated.push('forest-elite');assert.deepEqual(getObjective(s).targetIds,['waterway-exit']);s.zone='waterway';assert.deepEqual(getObjective(s).targetIds,['loren-memory']);s.flags.push('loren-memory');assert.deepEqual(getObjective(s).targetIds,['water-gauge','valve-1','valve-2']);s.mechanisms['valve-1']=s.mechanisms['valve-2']=1;assert.deepEqual(getObjective(s).targetIds,['water-elite']);
-  s.defeated.push('water-elite');s.zone='forest';assert.deepEqual(getObjective(s).targetIds,['waterway-exit']);s.zone='tower';assert.deepEqual(getObjective(s).targetIds,['tower-stele','dial-1','dial-2','dial-3']);Object.assign(s.mechanisms,{'dial-1':2,'dial-2':1,'dial-3':3});assert.deepEqual(getObjective(s).targetIds,['eclipse']);s.defeated.push('eclipse');assert.deepEqual(getObjective(s).targetIds,['dawn']);s.flags.push('ending');assert.deepEqual(getObjective(s).targetIds,['tower-back']);s.zone='village';assert.deepEqual(getObjective(s).targetIds,[]);
+test('舊中篇保留劇情和狀態，舊短篇進度接上同一條主線', () => {
+  const existing = newGame();
+  existing.zone = existing.checkpoint.zone = 'archive';
+  existing.flags = ['P00', 'C3-06', 'C5-01', 'sq07-a'];
+  existing.discoveredObjectIds = ['L20'];
+  assert.deepEqual(migrateSave({ ...existing, version: 1, flags: [...existing.flags, 'medium-campaign'] }), existing);
+
+  const original = newGame();
+  original.zone = original.checkpoint.zone = 'forest';
+  original.flags = ['intro', 'main-quest', 'visited-forest', 'bridge-reward', 'herb-1'];
+  original.defeated = ['f1'];
+  original.mechanisms = { 'beacon-1': 1 };
+  original.leaderId = 'loren';
+  const inForest = migrateSave({ ...original, version: 1 }) as GameState;
+  assert.equal(inForest.zone, 'forest');
+  assert.equal(inForest.leaderId, 'loren');
+  assert.equal(inForest.inventory.potion, original.inventory.potion);
+  assert.deepEqual(boardValues(inForest, PUZZLE_BOARDS[0]), PUZZLE_BOARDS[0].answer);
+  assert.deepEqual(mediumSteps(inForest).map(step => step.target), ['beacon-2', 'beacon-3']);
+  assert.ok(inForest.flags.includes('bridge-reward'));
+  assert.ok(!areaObjects(inForest).some(o => o.id === 'herb-1'));
+
+  original.zone = original.checkpoint.zone = 'tower';
+  original.flags.push('loren-memory', 'ending', 'star-aligned', 'weapon-upgrade');
+  original.defeated.push('forest-elite', 'water-elite', 'eclipse');
+  original.xp = 250;
+  original.party[0].accessory = 'moon-charm';
+  const beforeDawn = migrateSave({ ...original, version: 1 }) as GameState;
+  assert.equal(beforeDawn.zone, 'waterway');
+  assert.equal(beforeDawn.checkpoint.zone, 'waterway');
+  assert.equal(mediumSteps(beforeDawn)[0]?.scene, 'C2-05');
+  assert.ok(!beforeDawn.flags.includes('ending'));
+  assert.equal(beforeDawn.party[0].accessory, 'moon-charm');
+  assert.deepEqual(beforeDawn.inventory, original.inventory);
+  assert.equal(beforeDawn.xp, original.xp);
+  assert.equal(beforeDawn.gold, original.gold);
+  assert.ok(!beforeDawn.defeated.includes('eclipse'));
+  const battle = startBattle(beforeDawn, fixture('eclipse'));
+  battle.status = 'victory';
+  const won = finishBattle(beforeDawn, battle);
+  assert.ok(won.defeated.includes('eclipse'));
+  assert.deepEqual(won.inventory, original.inventory);
+  assert.equal(won.xp, original.xp);
+  assert.equal(won.gold, original.gold);
+  assert.ok(original.flags.includes('ending'));
+  assert.deepEqual(migrateSave(beforeDawn), beforeDawn);
+});
+test('主線與機關共用同一套地圖目標', () => {
+  const s = newGame();
+  for (const chapter of MEDIUM_CHAPTERS.slice(0, 2)) {
+    s.zone = chapter.zone;
+    for (const step of chapter.groups.flat()) finishMediumStep(s, step);
+  }
+  s.zone = 'waterway';
+  assert.deepEqual(getObjective(s).targetIds, ['canal-intake']);
+  finishMediumStep(s, mediumSteps(s)[0]);
+  assert.deepEqual(getObjective(s).targetIds, ['water-gauge', 'valve-1', 'valve-2', 'loren-memory']);
+  s.flags.push('C8-06');
+  assert.deepEqual(getObjective(s).targetIds, []);
 });
 test('four-unit discovery boundary is persistent, idempotent and hides collected items',async()=>{
   const {discoverNearby,visibleMapObjects}=await import('./game');const s=newGame();s.zone='forest';s.position={x:-9,z:9};
   assert.ok(discoverNearby(s));assert.ok(s.discoveredObjectIds.includes('herb-1'));const length=s.discoveredObjectIds.length;discoverNearby(s);assert.equal(s.discoveredObjectIds.length,length);
   assert.ok(visibleMapObjects(s).some(o=>o.id==='herb-1'));s.flags.push('herb-1');assert.ok(!visibleMapObjects(s).some(o=>o.id==='herb-1'));
   s.position={x:9,z:5.01};assert.ok(!s.discoveredObjectIds.includes('herb-2'));discoverNearby(s);assert.ok(!s.discoveredObjectIds.includes('herb-2'));
+});
+
+test('拾取旗標在存讀檔後同時隱藏實體物件、地圖標記與互動提示', async () => {
+  const { closestObject, discoverNearby, explorationMarkers, visibleMapObjects } = await import('./game');
+  const records = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => records.get(key) ?? null,
+    setItem: (key: string, value: string) => { records.set(key, value); },
+  };
+  const s = newGame();
+  for (const [zone, id] of [['village', 'village-chest'], ['forest', 'herb-1'], ['waterway', 'pendant'],
+    ['village', 'village-letter'], ['corridor', 'L23']] as const) {
+    s.zone = zone;
+    const object = areaObjects(s).find(object => object.id === id)!;
+    s.position = { x: object.x, z: object.z };
+    assert.equal(closestObject(s, id)?.id, id);
+    discoverNearby(s);
+    assert.ok(visibleMapObjects(s).some(object => object.id === id));
+    s.flags.push(id);
+    saveGame(storage, 'auto', s);
+    const loaded = loadGame(storage, 'auto').state!;
+    assert.ok(!areaObjects(loaded).some(object => object.id === id));
+    assert.ok(!visibleMapObjects(loaded).some(object => object.id === id));
+    assert.equal(closestObject(loaded, id), undefined);
+    assert.ok(!explorationMarkers(loaded, undefined).some(({ object }) => object.id === id));
+  }
+  s.zone = 'village';
+  s.flags.push('village-bell');
+  assert.ok(areaObjects(s).some(object => object.id === 'village-bell'));
 });
 
 test('exploration hints do not change interaction range or reveal secret loot early', async () => {
@@ -350,9 +424,45 @@ test('an unbroken guardian attacks both heroes and respects their guard', () => 
     battle = result.battle;
     if (turn === 5) {
       const hits = result.events.filter(event => event.type === 'damage');
-      assert.deepEqual(hits.map(event => event.target), ['lien', 'loren']);
+      assert.deepEqual(hits.map(event => [event.target, event.enemyMove]), [['lien', 'sweep'], ['loren', 'sweep']]);
       assert.ok(hits[0].amount! < hits[1].amount!);
       assert.equal(battle.enemies[0].charging, false);
     }
   }
+});
+
+test('地圖居民與支線人物都有角色圖，守鐘人階段共用判斷', () => {
+  const worldPoints = Object.values(ALL_ZONES).flatMap(zone => zone.objects).concat(Object.values(MEDIUM_POINTS).flat());
+  const residents = worldPoints.filter(point => point.kind === 'npc').map(point => point.id);
+  assert.deepEqual(Object.keys(NPC_ART).sort(), residents.sort());
+  for (const quest of MEDIUM_QUESTS) {
+    for (const stop of quest.stops) {
+      for (const [speaker] of stop.lines) {
+        if (speaker === '旁白') continue;
+        const art = dialogueArtKey(speaker, stop.point.id);
+        assert.ok(art && (art === 'lien' || art === 'loren' || Object.hasOwn(TRAVELER_ART, art)), speaker);
+      }
+    }
+  }
+  assert.equal(dialogueArtKey('旅客', 'sq04-b'), 'ticket-owner');
+  assert.notEqual(dialogueArtKey('寄存者', 'sq07-a'), dialogueArtKey('寄存者', 'sq08-b'));
+  assert.equal(dialogueArtKey('無光的守鐘人', 'C8-03'), enemyArtKey('eclipse', 1));
+  assert.equal(dialogueArtKey('無光的守鐘人', 'C8-04'), ECLIPSE_FORM);
+  assert.equal(enemyArtKey('eclipse', 2), ECLIPSE_FORM);
+});
+
+test('敵人與首領動作在命中時達到出手定格，並回到原位', () => {
+  assert.deepEqual(Object.keys(enemyMotions).sort(), [...Object.keys(ENEMIES), ECLIPSE_FORM].sort());
+  const impact = enemyAttackTiming.impact / enemyAttackTiming.duration;
+  for (const motion of Object.values(enemyMotions)) {
+    assert.ok(enemyAttackPose(motion, .24, 'strike').advance < 0);
+    const strike = enemyAttackPose(motion, impact, 'strike');
+    assert.equal(strike.frame, enemyPose.strike);
+    assert.equal(strike.advance, motion.strike.advance);
+    assert.ok(enemyAttackPose(motion, impact, 'heavy').advance > strike.advance);
+    assert.deepEqual(enemyAttackPose(motion, 1, 'strike'), { frame: enemyPose.rest, advance: 0, lift: 0, tilt: 0, squash: 0 });
+  }
+  const b = startBattle(ready(), fixture('f1'));
+  b.round = 3; b.cursor = b.order.indexOf('enemy-0');
+  assert.equal(advanceEnemies(b).events.find(event => event.type === 'damage')?.enemyMove, 'heavy');
 });

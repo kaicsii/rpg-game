@@ -16,9 +16,29 @@ async page => {
   check(await page.evaluate(() => window.__starlight.getMode() === 'explore'), 'A distant marker does not extend interaction range');
   await page.screenshot({ path: 'output/playwright/landmarks-village.png' });
   await moveTo(-6, 6.3);
+  const baseYaw = Math.atan2(24, 34);
+  await page.waitForFunction(yaw => Math.abs(window.__starlight.view().yaw - yaw) < 0.005, baseYaw);
+  const miraIsVisible = () => {
+    const game = window.__starlight;
+    const point = game.screenPoint(-7, 7, 1.1);
+    return game.pick(point.x, point.y)?.id === 'child';
+  };
+  check(!await page.evaluate(miraIsVisible), 'The house blocks Mira at the exploration angle');
   await page.getByRole('button', { name: /與米菈交談/ }).click();
   check((await page.locator('.dialogue-heading').innerText()).includes('米菈'), 'Approaching Mira opens her interaction');
+  await page.waitForFunction(miraIsVisible);
+  check(await page.evaluate(yaw => Math.abs(window.__starlight.view().yaw - yaw) > 0.25, baseYaw), 'Conversation turns to a clear angle');
+  await page.waitForFunction(() => window.__starlight.view().right < 8.2);
+  check(await page.evaluate(() => {
+    const game = window.__starlight;
+    const panel = document.querySelector('.dialogue-panel').getBoundingClientRect();
+    return [[-7, 7], [-6, 6.3]].map(([x, z]) => game.screenPoint(x, z, 0.55))
+      .every(point => point.x > 0 && point.x < innerWidth && point.y > 0 && point.y < panel.top);
+  }), 'Mira and the traveler are framed above the dialogue panel');
+  await page.screenshot({ path: 'output/playwright/landmarks-mira-camera.png' });
   await page.keyboard.press('Escape');
+  await page.waitForFunction(yaw => Math.abs(window.__starlight.view().yaw - yaw) < 0.01, baseYaw);
+  checks.push('Skipping the conversation restores the exploration angle');
   await moveTo(6, 2.3);
   await marker('child').waitFor({ state: 'detached' });
   checks.push('Leaving discovery range removes the world marker');
@@ -28,8 +48,8 @@ async page => {
   await page.keyboard.press('Escape');
   await moveTo(0, 6);
   await page.setViewportSize({ width: 390, height: 844 });
-  await marker('child').waitFor({ state: 'visible', timeout: 5000 });
-  checks.push('Mira is still visible from the village start in portrait');
+  await marker('child').waitFor({ state: 'attached' });
+  check(await page.locator('.minimap [data-map-view] title').allTextContents().then(names => names.includes('米菈')), 'Mira remains on the map in portrait');
   check(await page.evaluate(() => {
     const visible = [...document.querySelectorAll('.world-marker')].filter(el => getComputedStyle(el).visibility === 'visible');
     const frame = document.querySelector('#game').getBoundingClientRect();
@@ -39,6 +59,64 @@ async page => {
     return boxes.length <= 4 && boxes.every((box, i) => box.left >= frame.left && box.right <= frame.right && box.top >= frame.top && box.bottom <= frame.bottom && !hud.some(rect => intersects(box, rect)) && !boxes.slice(0, i).some(rect => intersects(box, rect)));
   }), 'Portrait marker budget avoids the HUD and other labels');
   await page.screenshot({ path: 'output/playwright/landmarks-portrait.png' });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await moveTo(-6, 6.3);
+  await page.keyboard.press('e');
+  await page.waitForFunction(miraIsVisible);
+  check(await page.evaluate(() => {
+    const game = window.__starlight;
+    return game.screenPoint(-7, 7, 0.55).y < document.querySelector('.dialogue-panel').getBoundingClientRect().top;
+  }), 'Reduced motion still reveals Mira above the portrait dialogue');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(yaw => Math.abs(window.__starlight.view().yaw - yaw) < 0.01, baseYaw);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await moveTo(9, -3);
+  const villageChestIsVisible = () => {
+    const game = window.__starlight;
+    const point = game.screenPoint(8, -3, 0.65);
+    return game.pick(point.x, point.y)?.id === 'village-chest';
+  };
+  check(!await page.evaluate(villageChestIsVisible), 'The village chest starts behind a wall');
+  await page.keyboard.press('e');
+  await page.waitForFunction(villageChestIsVisible);
+  check(!(await page.evaluate(() => window.__starlight.getState().flags)).includes('village-chest'), 'The camera reveals the chest before it is collected');
+  await page.waitForFunction(() => window.__starlight.getState().flags.includes('village-chest'));
+  check(!await page.evaluate(villageChestIsVisible), 'The chest still disappears after collection');
+  await page.waitForFunction(yaw => Math.abs(window.__starlight.view().yaw - yaw) < 0.01, baseYaw);
+  await page.evaluate(() => window.__starlight.interact('village-letter'));
+  await page.keyboard.press('Escape');
+  await marker('village-letter').waitFor({ state: 'detached' });
+  await page.keyboard.press('j');
+  check(await page.getByText('一封沒有寄出的信', { exact: true }).isVisible(), 'Collected letter disappears but can still be read in the journal');
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(() => window.__starlight.fixture('waterway'));
+  await moveTo(-9, 0);
+  const chest = page.locator('.minimap [data-map-view] title').filter({ hasText: '石室中的寶箱' });
+  await chest.waitFor({ state: 'attached' });
+  const pickChest = () => page.evaluate(() => {
+    const game = window.__starlight;
+    const { x, y } = game.screenPoint(-9, -1, 0.65);
+    return game.pick(x, y)?.id;
+  });
+  check(await pickChest() === 'waterway-chest', 'The unopened chest is visible and clickable in the world');
+  await page.keyboard.press('e');
+  const state = await page.evaluate(() => window.__starlight.getState());
+  check(state.flags.includes('waterway-chest') && state.gold === 60, 'Opening the chest grants its reward');
+  await chest.waitFor({ state: 'detached' });
+  await marker('waterway-chest').waitFor({ state: 'detached' });
+  check(await pickChest() !== 'waterway-chest', 'Collected chest vanishes from the scene and is no longer clickable');
+  await page.keyboard.press('e');
+  check(await page.evaluate(() => window.__starlight.getState().gold) === state.gold, 'Spent chest cannot grant the reward again');
+  await page.keyboard.press('m');
+  check(!(await page.locator('.map-points').innerText()).includes('石室中的寶箱'), 'The full map no longer lists the chest');
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.getByRole('button', { name: '繼續旅程', exact: true }).click();
+  await page.locator('.save-slot').first().getByRole('button', { name: '讀取記錄' }).click();
+  check(await chest.count() === 0 && await pickChest() !== 'waterway-chest', 'Reloading the save keeps the chest gone');
   check(!errors.length, 'No browser errors');
   return { checks, errors };
 }

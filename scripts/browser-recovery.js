@@ -10,10 +10,12 @@ async (page) => {
   if (await page.locator('.save-slot').first().getByRole('button',{name:'讀取記錄'}).isEnabled()) throw new Error('Corrupt slot was enabled');
   await page.locator('.save-slot').last().getByRole('button',{name:'讀取記錄'}).click(); checks.push('Corrupt auto slot preserves readable manual slot');
   await page.evaluate(()=>window.__starlight.encounter('water-elite'));
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
   async function lose() {
     for(let i=0;i<10;i++) {
       if((await page.evaluate(()=>window.__starlight.getBattle().status))==='defeat') return;
-      await page.getByRole('button',{name:'防禦 減傷・恢復 4 MP'}).click();
+      await page.getByRole('button',{name:'防禦 恢復 4 MP'}).click();
       await page.waitForFunction(()=>!document.querySelector('.battle-thinking'));
     }
     throw new Error('Defeat did not occur');

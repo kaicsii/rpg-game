@@ -2,7 +2,6 @@ import { ALL_ZONES, type GameState, type Interactable, type ZoneId } from './dat
 import { MEDIUM_CHAPTERS, MEDIUM_NOTES, MEDIUM_POINTS, MEDIUM_QUESTS, MEDIUM_ROUTE, MEDIUM_TALKS, MEDIUM_TEXT, type StoryStep } from './medium-content';
 import { fieldObjective } from './puzzles';
 
-export const isMedium = (state: GameState) => state.flags.includes('medium-campaign');
 export const mediumFlag = (step: StoryStep) => step.part ? `${step.scene}:${step.part}` : step.scene;
 const done = (state: GameState, flag: string) => state.flags.includes(flag);
 export const mediumChapter = (state: GameState) => MEDIUM_CHAPTERS.find(chapter => chapter.groups.some(group => group.some(step => !done(state, mediumFlag(step)))));
@@ -52,9 +51,9 @@ export function mediumObjects(state: GameState): Interactable[] {
     if (['village-neighbor','village-public','village-corridor'].includes(point.id) && !done(state, 'C5-06')) continue;
     objects.push(point);
   }
-  for (const [id, region, x, z] of MEDIUM_NOTES) {
+  for (const [id, region, x, z, takeOnRead] of MEDIUM_NOTES) {
     if (region !== zone || id === 'L21' && !done(state, 'C6-02') || id === 'L17' && !done(state, 'C4-03')) continue;
-    objects.push({ id, x, z, label: MEDIUM_TEXT[id].title, kind: 'lore' });
+    objects.push({ id, x, z, label: MEDIUM_TEXT[id].title, kind: 'lore', takeOnRead });
   }
   for (const quest of MEDIUM_QUESTS) {
     const stop = nextQuestStop(state, quest);

@@ -35,6 +35,7 @@ MacBook Pro，Apple M1 Pro、16 GB RAM、macOS 15.8.1。
 
 ```sh
 npx --yes --package @playwright/cli@0.1.23 playwright-cli open http://localhost:5173 --headed
+npx --yes --package @playwright/cli@0.1.23 playwright-cli run-code --filename scripts/medium-qa.js
 npx --yes --package @playwright/cli@0.1.23 playwright-cli run-code --filename scripts/browser-qa.js
 npx --yes --package @playwright/cli@0.1.23 playwright-cli run-code --filename scripts/browser-recovery.js
 ```
@@ -143,3 +144,10 @@ npx --yes --package @playwright/cli@0.1.23 playwright-cli run-code --filename sc
 - 29 項單元測試與正式建置通過。Chrome 的 `scripts/layout-qa.js` 通過 189 項檢查，含十種視窗、異側安全邊距、高 DPI、地圖與互動鍵間距、模擬觸控及鍵盤焦點。
 - 320 × 568 下檢查三張敵方卡同列、選擇目標時出現護盾資訊，以及出手後鍵盤焦點返回指令。地標與世界標記的 10 項回歸也通過。
 - 可在 `output/playwright/` 檢視 `hud-explore-1280.png`、`hud-battle-1280.png`、`hud-battle-390.png`。實體手機與其他瀏覽器仍待驗證。
+
+## 2026-11-23 正式主線整合
+
+- 28 項自動測試與正式建置通過。主線只打八場必要戰鬥即可完成並升至九級。
+- Chrome 從單一「啟程」入口跑完八區、54 場主線、九道機關、八場必要戰鬥與六場尾聲，確認 12 條支線、24 篇環境故事及八段談心。另驗證古橋提燈支線會改變守木戰後的對白。
+- 已確認舊中篇保留尾聲進度，舊短篇在鐘塔通關後可從沉星水道接到灰港。原有裝備與星幣保留，終戰獎勵僅發一次。
+- Chrome 亦確認八區互動及遭遇可達、手動記錄可恢復位置和設定、敗北可重試或返回最近星燈，正式預覽只有一個新遊戲入口。完整人工遊玩時長仍待實測。

@@ -1,14 +1,20 @@
-import { ENEMIES, SKILLS, ALL_ZONES as ZONES, ZONE_ORDER, type GameState, type CombatEffect, type Hero, type ItemId, type Encounter, type Element, type HeroId, type ZoneId } from './data';
-import { MEDIUM_NOTES } from './medium-content';
-import { isMedium, mediumObjects, mediumObjective } from './medium';
-import { FIELD_CLUES, fieldObjective, nextForestBeacon, northGateOpen, skyAligned, waterDrained } from './puzzles';
-const shortRoute: readonly ZoneId[] = ZONE_ORDER;
-export const levelFor = (xp: number, medium = false) => (medium ? [0, 20, 55, 100, 160, 225, 300, 380, 470] : [0, 20, 55, 100, 160]).filter(n => xp >= n).length;
-export const partyLevel = (state: GameState) => levelFor(state.xp, isMedium(state));
+import type { EnemyMove } from './enemy-motion';
+import { ENEMIES, SKILLS, ALL_ZONES as ZONES, ZONE_ORDER, type GameState, type CombatEffect, type Hero, type ItemId, type Encounter, type Element, type HeroId, type Interactable, type ZoneId } from './data';
+import { MEDIUM_CHAPTERS, MEDIUM_NOTES } from './medium-content';
+import { finishMediumStep, mediumObjects, mediumObjective } from './medium';
+import { BEACONS, FIELD_CLUES, PUZZLE_BOARDS, VALVES, checkPuzzleBoard, choosePuzzleValue, waterDrained } from './puzzles';
+export const levelFor = (xp: number) => [0, 20, 55, 100, 160, 225, 300, 380, 470].filter(n => xp >= n).length;
+export const partyLevel = (state: GameState) => levelFor(state.xp);
+export function isCollected(state: GameState, object: Interactable): boolean {
+  return (object.kind === 'chest' || object.kind === 'herb' || object.kind === 'memory' || object.takeOnRead === true)
+    && has(state, object.id);
+}
 export const areaObjects = (state: GameState) => {
-  const objects = isMedium(state) ? mediumObjects(state) : ZONES[state.zone].objects;
+  const objects = mediumObjects(state);
   const clue = FIELD_CLUES[state.zone];
-  return clue ? [...objects, clue.point] : objects;
+  const available = objects.filter(object => !isCollected(state, object));
+  if (clue) available.push(clue.point);
+  return available;
 };
 export function heroStats(id: HeroId, level: number, accessory: string | null = null, weapon = false): Hero {
   const mage = id === 'lien';
@@ -17,7 +23,7 @@ export function heroStats(id: HeroId, level: number, accessory: string | null = 
   return { id, name: mage ? '莉恩' : '洛恩', hp: maxHp, mp: maxMp, maxHp, maxMp, atk: (mage ? 15 : 19) + (level - 1) * 4 + (weapon ? 5 : 0), def: (mage ? 5 : 8) + (level - 1) * 2, speed: mage ? 11 : 8, accessory };
 }
 export function newGame(): GameState {
-  return { version: 1, leaderId: 'lien', discoveredObjectIds: [], zone: 'village', position: { x: 0, z: 6 }, party: [heroStats('lien', 1), heroStats('loren', 1)], xp: 0, gold: 40, inventory: { potion: 5, ether: 3, revive: 2 }, flags: [], defeated: [], mechanisms: {}, checkpoint: { zone: 'village', position: { x: 0, z: 5 } }, playSeconds: 0, settings: { volume: 0.35, quality: 'high', reducedMotion: false, autoStopLowHp: true } };
+  return { version: 2, leaderId: 'lien', discoveredObjectIds: [], zone: 'village', position: { x: 0, z: 6 }, party: [heroStats('lien', 1), heroStats('loren', 1)], xp: 0, gold: 40, inventory: { potion: 5, ether: 3, revive: 2 }, flags: [], defeated: [], mechanisms: {}, checkpoint: { zone: 'village', position: { x: 0, z: 5 } }, playSeconds: 0, settings: { volume: 0.35, quality: 'high', reducedMotion: false, autoStopLowHp: true } };
 }
 export const has = (state: GameState, flag: string) => state.flags.includes(flag);
 export const bridgeClueFlag = (hero: HeroId) => `bridge-clue-${hero}`;
@@ -46,29 +52,7 @@ export function applyItem(hero: Hero, item: ItemId): boolean {
   else { if (hero.mp === hero.maxMp) return false; hero.mp = Math.min(hero.maxMp, hero.mp + 15); }
   return true;
 }
-export function puzzleSolved(state: GameState, zone: ZoneId = state.zone): boolean {
-  if (zone === 'forest') return !nextForestBeacon(state);
-  if (zone === 'waterway') return waterDrained(state) && has(state, 'loren-memory');
-  if (zone === 'tower') return skyAligned(state);
-  return has(state, 'main-quest');
-}
-export function getObjective(state: GameState): { text: string; targetIds: string[] } {
-  if (isMedium(state)) return mediumObjective(state);
-  const result = (text: string, ...targetIds: string[]) => ({ text, targetIds });
-  const exit = () => ZONES[state.zone].objects.find(o => o.kind === 'exit')!.id;
-  const back = () => ZONES[state.zone].objects.find(o => o.kind === 'back')!.id;
-  if (has(state, 'ending')) return result('黎明已至。回到村莊，與大家分享這段旅程。', ...(state.zone === 'village' ? [] : [back()]));
-  if (!has(state, 'main-quest')) return result('與廣場上的守燈婆婆交談', state.zone === 'village' ? 'elder' : back());
-  if (state.zone === 'village' && !northGateOpen(state)) return result('到北方出口解開鐘譜，前往螢光森林。', 'forest-exit');
-  const destination = !state.defeated.includes('forest-elite') ? 'forest' : !state.defeated.includes('water-elite') ? 'waterway' : 'tower';
-  if (state.zone !== destination) return result(`前往${ZONES[destination].name}，繼續尋回星火`, shortRoute.indexOf(state.zone) < shortRoute.indexOf(destination) ? exit() : back());
-  if (state.zone === 'forest') return fieldObjective(state) ?? result('擊敗古橋守木，取得第一縷星火', 'forest-elite');
-  if (state.zone === 'waterway') {
-    if (!has(state, 'loren-memory')) return result('找回水道西北方的騎士記憶', 'loren-memory');
-    return fieldObjective(state) ?? result('擊敗守潮者，打開鐘塔的道路', 'water-elite');
-  }
-  return fieldObjective(state) ?? (state.defeated.includes('eclipse') ? result('走向北方星台，重燃星燈', 'dawn') : result('面對無光的守鐘人', 'eclipse'));
-}
+export const getObjective = mediumObjective;
 export const objective = (state: GameState) => getObjective(state).text;
 export function discoverNearby(state: GameState): boolean {
   const added = areaObjects(state).filter(o => ['chest','herb','memory','lore','clue'].includes(o.kind) && !state.discoveredObjectIds.includes(o.id) && Math.hypot(o.x-state.position.x,o.z-state.position.z) <= 4).map(o => o.id);
@@ -76,13 +60,10 @@ export function discoverNearby(state: GameState): boolean {
 }
 export function visibleMapObjects(state: GameState) {
   const targets = getObjective(state).targetIds;
-  return availableObjects(state).filter(o => ['exit','back','lamp','npc'].includes(o.kind) || o.id.startsWith('sq') || o.id.startsWith('H') || targets.includes(o.id) || state.discoveredObjectIds.includes(o.id));
-}
-function availableObjects(state: GameState) {
-  return areaObjects(state).filter(o => !(['chest','herb','memory'].includes(o.kind) && has(state,o.id)));
+  return areaObjects(state).filter(o => ['exit','back','lamp','npc'].includes(o.kind) || o.id.startsWith('sq') || o.id.startsWith('H') || targets.includes(o.id) || state.discoveredObjectIds.includes(o.id));
 }
 function objectsByDistance(state: GameState) {
-  return availableObjects(state).map(object => ({ object, distance: Math.hypot(object.x - state.position.x, object.z - state.position.z) })).sort((a, b) => a.distance - b.distance);
+  return areaObjects(state).map(object => ({ object, distance: Math.hypot(object.x - state.position.x, object.z - state.position.z) })).sort((a, b) => a.distance - b.distance);
 }
 export function explorationMarkers(state: GameState, nearest: ReturnType<typeof closestObject>) {
   const mainTargets = getObjective(state).targetIds;
@@ -117,21 +98,6 @@ export function combatStatuses(battle: Battle, id: string): string[] {
   if (enemy) return enemy.hp <= 0 ? [] : [...(enemy.broken ? [enemy.recovering ? '破盾：在敵人下次行動前，受到傷害增加' : '破盾：跳過下次行動、受到傷害增加'] : []), ...(enemy.armor > 0 ? [`碎甲：防禦降低，剩 ${enemy.armor} 次敵方行動`] : [])];
   return [...(battle.guarding.includes(id) ? ['防禦：減少傷害，直到下次出手'] : []), ...(battle.cover === id ? ['護衛：承受同伴下一次攻擊'] : [])];
 }
-export function canLeave(state: GameState): string | null {
-  if (!puzzleSolved(state)) return state.zone === 'village' ? '先和守燈婆婆談談，再出發吧。' : '還有未完成的機關。任務日誌裡有線索。';
-  if (state.zone === 'village' && !northGateOpen(state)) return '北門還在等三聲鐘響。走近出口試著解讀鐘譜。';
-  const gates: Partial<Record<ZoneId, string>> = { forest: 'forest-elite', waterway: 'water-elite', tower: 'eclipse' };
-  const gate = gates[state.zone];
-  return gate && !state.defeated.includes(gate) ? '前方的守衛仍在等待。先面對它吧。' : null;
-}
-export function travel(state: GameState, direction: 1 | -1): GameState {
-  const next = structuredClone(state); const index = shortRoute.indexOf(state.zone) + direction;
-  if (index < 0 || index >= ZONE_ORDER.length) return next;
-  next.zone = ZONE_ORDER[index]; next.position = { x: 0, z: direction === 1 ? 8.5 : -9 };
-  if (next.zone === 'forest' && !has(next, 'visited-forest')) next.flags.push('visited-forest');
-  next.checkpoint = { zone: next.zone, position: { x: 0, z: direction === 1 ? 8.5 : -9 } };
-  return next;
-}
 export interface Enemy { id: string; template: string; name: string; hp: number; maxHp: number; atk: number; def: number; speed: number; weakness: Element; shield: number; maxShield: number; revealed: Element[]; charging: boolean; broken: boolean; recovering?: boolean; armor: number; phase: number; }
 export interface Battle {
   encounter: Encounter; heroes: Hero[]; enemies: Enemy[]; inventory: Record<ItemId, number>;
@@ -139,7 +105,7 @@ export interface Battle {
   status: 'active' | 'victory' | 'defeat' | 'escaped'; log: string[];
 }
 export type Action = { kind: 'attack' | 'guard' | 'skill' | 'item' | 'resonance' | 'escape'; id?: string; target?: string };
-export interface BattleEvent { source?: string; effect?: CombatEffect; text: string; target?: string; amount?: number; type: 'damage' | 'heal' | 'info' | 'break' }
+export interface BattleEvent { source?: string; enemyMove?: EnemyMove; effect?: CombatEffect; text: string; target?: string; amount?: number; type: 'damage' | 'heal' | 'info' | 'break' }
 export const currentActor = (b: Battle) => b.order[b.cursor];
 export function startBattle(state: GameState, encounter: Encounter): Battle {
   const b: Battle = { encounter: structuredClone(encounter), heroes: structuredClone(state.party), inventory: { ...state.inventory }, enemies: encounter.enemies.map((key, i) => {
@@ -229,7 +195,7 @@ export function advanceEnemies(input: Battle): { battle: Battle; events: BattleE
           const target = protector && protector.hp > 0 && ally.id !== protector.id ? protector : ally;
           const amount = Math.max(1, Math.round(damage(e.atk, target.def, 1.65) * (b.guarding.includes(target.id) ? 0.45 : 1)));
           target.hp = Math.max(0, target.hp - amount);
-          events.push({ type: 'damage', source: e.id, effect: 'slash', target: target.id, amount, text: `${e.name}以根鬚橫掃${target.name}，造成 ${amount} 點傷害。` });
+          events.push({ type: 'damage', source: e.id, enemyMove: 'sweep', effect: 'slash', target: target.id, amount, text: `${e.name}以根鬚橫掃${target.name}，造成 ${amount} 點傷害。` });
         }
         b.cover = null;
       } else if (guardian(e) && b.round % 3 === 2) {
@@ -241,7 +207,7 @@ export function advanceEnemies(input: Battle): { battle: Battle; events: BattleE
         if (b.cover && target.id !== b.cover) { target = b.heroes.find(h => h.id === b.cover && h.hp > 0) ?? target; b.cover = null; }
         const strong = !guardian(e) && isHeavyRound(b.round); const amount = Math.max(1, Math.round(damage(e.atk, target.def, strong ? 1.6 : 1) * (b.guarding.includes(target.id) ? 0.45 : 1)));
         target.hp = Math.max(0, target.hp - amount);
-        events.push({ type: 'damage', source: e.id, effect: ['wisp', 'moth'].includes(e.template) ? 'star' : 'slash', target: target.id, amount, text: `${e.name}${strong ? '蓄力重擊' : '攻擊'}${target.name}，造成 ${amount} 點傷害。` });
+        events.push({ type: 'damage', source: e.id, enemyMove: strong ? 'heavy' : 'strike', effect: ['wisp', 'moth'].includes(e.template) ? 'star' : 'slash', target: target.id, amount, text: `${e.name}${strong ? '蓄力重擊' : '攻擊'}${target.name}，造成 ${amount} 點傷害。` });
       }
       if (e.armor > 0) e.armor--;
     }
@@ -249,17 +215,21 @@ export function advanceEnemies(input: Battle): { battle: Battle; events: BattleE
   }
   record(b, events); return { battle: b, events };
 }
+export const earnsVictoryRewards = (state: GameState, encounter: Encounter) =>
+  !state.defeated.includes(encounter.id) && !(encounter.id === 'eclipse' && has(state, 'legacy-eclipse-reward'));
+
 export function finishBattle(state: GameState, battle: Battle): GameState {
   const next = structuredClone(state); next.party = structuredClone(battle.heroes); next.inventory = { ...battle.inventory };
   if (battle.status !== 'victory' || next.defeated.includes(battle.encounter.id)) return next;
   next.defeated.push(battle.encounter.id);
-  for (const key of battle.encounter.enemies) { next.xp += ENEMIES[key].xp; next.gold += ENEMIES[key].gold; }
-  if (battle.encounter.required) {
-    next.inventory.potion += 2; next.inventory.ether += 2; next.inventory.revive++;
-    if (battle.encounter.id === 'forest-elite') next.flags.push('weapon-upgrade');
+  if (earnsVictoryRewards(state, battle.encounter)) {
+    for (const key of battle.encounter.enemies) { next.xp += ENEMIES[key].xp; next.gold += ENEMIES[key].gold; }
+    if (battle.encounter.required) {
+      next.inventory.potion += 2; next.inventory.ether += 2; next.inventory.revive++;
+      if (battle.encounter.id === 'forest-elite') next.flags.push('weapon-upgrade');
+    }
   }
   refreshStats(next);
-  // shortcut: small post-battle recovery supports a short, fixed campaign; rebalance for longer campaigns.
   next.party.forEach(h => { h.hp = Math.min(h.maxHp, Math.max(1, h.hp) + Math.ceil(h.maxHp * 0.2)); h.mp = Math.min(h.maxMp, h.mp + 3); });
   return next;
 }
@@ -269,9 +239,9 @@ export function validSave(value: unknown): value is GameState {
   if (!value || typeof value !== 'object') return false;
   const s = value as GameState;
   if (![s.flags, s.defeated].every(a => Array.isArray(a) && a.every(v => typeof v === 'string'))) return false;
-  const zones = isMedium(s) ? Object.keys(ZONES) : shortRoute;
-  if (!['lien','loren'].includes(s.leaderId) || !Array.isArray(s.discoveredObjectIds) || !s.discoveredObjectIds.every(id => Object.values(ZONES).some(z => z.objects.some(o => o.id === id)) || isMedium(s) && MEDIUM_NOTES.some(([note]) => note === id))) return false;
-  if (s.version !== 1 || !zones.includes(s.zone) || !finite(s.position?.x, -14, 14) || !finite(s.position?.z, -11, 11)) return false;
+  const zones = Object.keys(ZONES);
+  if (!['lien','loren'].includes(s.leaderId) || !Array.isArray(s.discoveredObjectIds) || !s.discoveredObjectIds.every(id => Object.values(ZONES).some(z => z.objects.some(o => o.id === id)) || MEDIUM_NOTES.some(([note]) => note === id))) return false;
+  if (s.version !== 2 || !zones.includes(s.zone) || !finite(s.position?.x, -14, 14) || !finite(s.position?.z, -11, 11)) return false;
   if (!Array.isArray(s.party) || s.party.length !== 2 || s.party[0]?.id !== 'lien' || s.party[1]?.id !== 'loren') return false;
   if (!s.party.every(h => h.name === (h.id === 'lien' ? '莉恩' : '洛恩') && [h.hp, h.mp, h.maxHp, h.maxMp, h.atk, h.def, h.speed].every(n => finite(n, 0, 10000)) && h.maxHp > 0 && h.hp <= h.maxHp && h.mp <= h.maxMp && [null, 'moon-charm', 'memory-charm'].includes(h.accessory))) return false;
   if (!finite(s.xp) || !finite(s.gold) || !finite(s.playSeconds) || !s.inventory || !['potion', 'ether', 'revive'].every(k => Number.isInteger(s.inventory[k as ItemId]) && finite(s.inventory[k as ItemId]))) return false;
@@ -279,12 +249,68 @@ export function validSave(value: unknown): value is GameState {
   if (!s.checkpoint || !zones.includes(s.checkpoint.zone) || !finite(s.checkpoint.position?.x, -14, 14) || !finite(s.checkpoint.position?.z, -11, 11)) return false;
   return !!s.settings && finite(s.settings.volume, 0, 1) && ['low', 'high'].includes(s.settings.quality) && typeof s.settings.reducedMotion === 'boolean' && typeof s.settings.autoStopLowHp === 'boolean';
 }
+function upgradeOriginalRoute(state: GameState) {
+  const forestWon = state.defeated.includes('forest-elite');
+  const waterWon = state.defeated.includes('water-elite');
+  const passedBridge = forestWon || waterWon || [state.zone, state.checkpoint.zone].some(zone => zone === 'waterway' || zone === 'tower');
+  const passedGate = passedBridge || has(state, 'visited-forest') || state.zone !== 'village' || state.checkpoint.zone !== 'village';
+  const scenes = new Set<string>();
+  if (has(state, 'intro') || has(state, 'main-quest') || passedGate) scenes.add('P00');
+  if (has(state, 'main-quest') || passedGate) scenes.add('P01');
+  if (passedGate) {
+    for (const id of ['P02', 'P03', 'P04', 'P05']) scenes.add(id);
+    const bells = PUZZLE_BOARDS[0];
+    bells.answer.forEach((value, index) => choosePuzzleValue(state, bells, index, value));
+    checkPuzzleBoard(state, bells);
+  }
+  if (passedBridge) {
+    for (const id of ['C1-01', 'C1-02', 'C1-03', 'C1-04', 'C1-05', 'C1-06']) scenes.add(id);
+    for (const beacon of BEACONS) state.mechanisms[beacon] = 1;
+  } else if (state.defeated.includes('f1')) scenes.add('C1-01');
+  if (waterWon || has(state, 'loren-memory') || VALVES.some(id => state.mechanisms[id] || state.mechanisms[`flow-${id}`])) scenes.add('C2-01');
+  if (waterWon || waterDrained(state)) {
+    scenes.add('C2-02');
+    for (const valve of VALVES) state.mechanisms[valve] = 1;
+  }
+  if (has(state, 'loren-memory')) scenes.add('C2-03');
+  if (waterWon) scenes.add('C2-04');
+  for (const chapter of MEDIUM_CHAPTERS) {
+    for (const step of chapter.groups.flat()) {
+      if (scenes.has(step.scene) || step.scene === 'C1-02' && state.mechanisms[step.target] === 1) finishMediumStep(state, step);
+    }
+  }
+  if (state.defeated.includes('eclipse')) {
+    state.defeated = state.defeated.filter(id => id !== 'eclipse');
+    state.flags.push('legacy-eclipse-reward');
+  }
+  state.flags = state.flags.filter(flag => flag !== 'ending');
+  if (state.checkpoint.zone === 'tower') state.checkpoint = { zone: 'waterway', position: { x: 0, z: 8.5 } };
+  if (state.zone === 'tower') {
+    state.zone = 'waterway';
+    state.position = { x: 0, z: 8.5 };
+  }
+  refreshStats(state);
+}
 export function migrateSave(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const s = value as Record<string, unknown>;
+  if (s.version !== 1) return value;
   const settings = s.settings;
-  return { ...s, ...(!Object.hasOwn(s,'leaderId') ? { leaderId: 'lien' } : {}), ...(!Object.hasOwn(s,'discoveredObjectIds') ? { discoveredObjectIds: [] } : {}),
-    settings: settings && typeof settings === 'object' && !Array.isArray(settings) ? { ...settings, ...(!Object.hasOwn(settings,'autoStopLowHp') ? { autoStopLowHp: true } : {}) } : settings };
+  const upgraded = {
+    ...s, version: 2,
+    ...(!Object.hasOwn(s, 'leaderId') ? { leaderId: 'lien' } : {}),
+    ...(!Object.hasOwn(s, 'discoveredObjectIds') ? { discoveredObjectIds: [] } : {}),
+    settings: settings && typeof settings === 'object' && !Array.isArray(settings)
+      ? { ...settings, ...(!Object.hasOwn(settings, 'autoStopLowHp') ? { autoStopLowHp: true } : {}) } : settings,
+  };
+  if (!validSave(upgraded)) return value;
+  const state = structuredClone(upgraded);
+  if (has(state, 'medium-campaign')) state.flags = state.flags.filter(flag => flag !== 'medium-campaign');
+  else {
+    if (![state.zone, state.checkpoint.zone].every(zone => (ZONE_ORDER as readonly ZoneId[]).includes(zone))) return value;
+    upgradeOriginalRoute(state);
+  }
+  return state;
 }
 export function saveGame(storage: StorageLike, slot: 'auto' | 'manual', state: GameState): string | null {
   try { storage.setItem(`starlight:${slot}`, JSON.stringify(state)); return null; } catch { return '瀏覽器無法儲存進度。你仍可繼續遊玩，請勿關閉此頁。'; }

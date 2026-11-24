@@ -14,6 +14,10 @@ async page => {
   await page.evaluate(()=>window.__starlight.interact('village-letter'));await page.keyboard.press('e');
   check(await page.evaluate(()=>window.__starlight.getMode()==='dialogue'),'E still advances one dialogue page');await page.keyboard.press('Escape');
   check(await page.evaluate(()=>window.__starlight.getState().flags.includes('village-letter')),'Esc collects lore');
+  for (const id of ['merchant', 'child', 'forest-exit']) {
+    await page.evaluate(id => window.__starlight.interact(id), id);
+    await page.keyboard.press('Escape');
+  }
   await page.evaluate(()=>window.__starlight.interact('forest-exit'));
   for (const [slot, value] of [2, 3, 1].entries()) await page.locator(`[data-action="puzzle:${slot}:${value}"]`).click();
   await page.getByRole('button', { name: '試敲鐘' }).click();
@@ -29,7 +33,7 @@ async page => {
   check((await auto().getAttribute('aria-pressed'))==='false'&&await page.evaluate(n=>window.__starlight.getBattle().log.length===n,stopped),'Auto can stop during playback with no extra attack');
   await page.keyboard.press('a');await page.keyboard.press('Escape');await page.waitForTimeout(500);
   check((await auto().getAttribute('aria-pressed'))==='false'&&await page.evaluate(n=>window.__starlight.getBattle().log.length===n,stopped),'Esc cancels pending auto attack');
-  await page.keyboard.press('a');await page.getByRole('button',{name:'技能 運用星火之力'}).click();await page.waitForTimeout(500);
+  await page.keyboard.press('a');await page.getByRole('button',{name:'技能',exact:true}).click();await page.waitForTimeout(500);
   check((await auto().getAttribute('aria-pressed'))==='false'&&await page.getByRole('heading',{name:/^(莉恩|洛恩)的技能$/}).isVisible(),'Manual command selection takes over from auto');
   await page.evaluate(()=>window.__starlight.fixture('forest',{ready:true,strong:true}));await page.keyboard.press('Escape');await page.getByRole('switch',{name:'減少動態效果'}).click();await page.keyboard.press('Escape');
   await page.evaluate(()=>window.__starlight.encounter('f3'));await ready();const inventory=await page.evaluate(()=>window.__starlight.getBattle().inventory);
@@ -39,13 +43,13 @@ async page => {
   check(await auto().isDisabled()&&(await auto().getAttribute('aria-pressed'))==='false','Victory stops auto');
   await page.locator('[data-action="battle:end"]').click();await page.evaluate(()=>window.__starlight.encounter('f1'));await ready();await page.waitForTimeout(500);
   check((await auto().getAttribute('aria-pressed'))==='false'&&await page.evaluate(()=>window.__starlight.getBattle().log.length===1),'Next encounter does not inherit auto');
-  await page.getByRole('button',{name:'撤離戰場'}).click();await ready();await page.getByRole('button',{name:'返回探索'}).click();
+  await page.getByRole('button',{name:'撤離',exact:true}).click();await ready();await page.getByRole('button',{name:'返回探索'}).click();
   await page.evaluate(()=>{window.__starlight.fixture('waterway',{ready:true});const s=window.__starlight.getState();s.party.forEach(h=>h.hp=1);s.settings.reducedMotion=true;s.settings.autoStopLowHp=false;localStorage.setItem('starlight:manual',JSON.stringify(s));});
   await page.reload();await page.getByRole('button',{name:'繼續旅程',exact:true}).click();await page.locator('.save-slot').last().getByRole('button',{name:'讀取記錄'}).click();
-  await page.evaluate(()=>window.__starlight.encounter('water-elite'));await ready();await page.keyboard.press('a');await page.waitForFunction(()=>window.__starlight.getBattle().status==='defeat');await ready();
+  await page.evaluate(()=>window.__starlight.encounter('water-elite'));await page.keyboard.press('Escape');await ready();await page.keyboard.press('a');await page.waitForFunction(()=>window.__starlight.getBattle().status==='defeat');await ready();
   check(await auto().isDisabled()&&(await auto().getAttribute('aria-pressed'))==='false','Defeat stops auto');await page.getByRole('button',{name:'重新挑戰',exact:true}).click();await ready();
   check((await auto().getAttribute('aria-pressed'))==='false','Retry starts in manual mode');
-  await page.evaluate(()=>{window.__starlight.fixture('tower',{ready:true,strong:true});const s=window.__starlight.getState();s.defeated.push('eclipse');localStorage.setItem('starlight:manual',JSON.stringify(s));});
+  await page.evaluate(()=>{window.__starlight.fixture('tower',{ready:true,strong:true});const s=window.__starlight.getState();s.defeated.push('eclipse');s.flags.push('C8-03','C8-04','C8-05');localStorage.setItem('starlight:manual',JSON.stringify(s));});
   await page.reload();await page.getByRole('button',{name:'繼續旅程',exact:true}).click();await page.locator('.save-slot').last().getByRole('button',{name:'讀取記錄'}).click();
   await page.evaluate(()=>window.__starlight.interact('dawn'));await page.keyboard.press('Escape');
   check(await page.evaluate(()=>window.__starlight.getMode()==='ending'&&window.__starlight.getState().flags.includes('ending')),'Esc completes ending and saves progress');

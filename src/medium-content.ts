@@ -49,7 +49,7 @@ const chapter = (zone: ZoneId, title: string, exit: string | null, result: strin
 export const MEDIUM_CHAPTERS = [
   chapter('village', '序章 · 長夜的微光', 'forest-exit', '莉恩接下婆婆的委託，與洛恩約定一同出發。',
     step('P00', 'opening', '與洛恩相遇'), step('P01', 'elder', '向守燈婆婆接下委託'),
-    step('P02', 'merchant', '到商攤向行腳商人打招呼'), step('P03', 'child', '到窗邊和米菈交談'),
+    [step('P02', 'merchant', '到商攤向行腳商人打招呼'), step('P03', 'child', '到窗邊和米菈交談')],
     step('P04', 'forest-exit', '在北方小徑詢問洛恩是否同行'), step('P05', 'forest-exit', '解開北門鐘譜，從小徑出發')),
   chapter('forest', '第一章 · 森林會記得', 'waterway-exit', '三盞路燈重亮，古橋守木交出了第一縷星火。',
     step('C1-01', 'f1', '擊退入口的露珠軟泥，試用弱點攻擊', { battle: true }),
@@ -105,9 +105,9 @@ export const MEDIUM_POINTS: Partial<Record<ZoneId, Interactable[]>> = {
 export const MEDIUM_NOTES = [
   ['L09','village',-4,3], ['L10','forest',-10,7], ['L11','waterway',-7,5],
   ['L12','station',-7,5], ['L13','station',7,3], ['L14','station',-8,-5],
-  ['L15','highland',-7,5], ['L16','highland',7,3], ['L17','highland',-8,-6],
+  ['L15','highland',-7,5], ['L16','highland',7,3,true], ['L17','highland',-8,-6],
   ['L18','archive',-8,5], ['L19','archive',7,-3], ['L20','archive',8,5], ['L21','village',5,4],
-  ['L22','corridor',-8,3], ['L23','corridor',7,-4], ['L24','tower',6,6],
+  ['L22','corridor',-8,3], ['L23','corridor',7,-4,true], ['L24','tower',6,6],
 ] as const;
 
 export const MEDIUM_TALKS = [

@@ -5,24 +5,61 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ALL_ZONES as ZONES, type CombatEffect, type GameState, type Interactable, type ZoneId, type Vec2 } from './data';
-import { type Battle, areaObjects, puzzleSolved } from './game';
+import { type Battle, areaObjects, isCollected } from './game';
 import { MEDIUM_NOTES, MEDIUM_QUESTS, MEDIUM_TALKS } from './medium-content';
-import { isMedium, mediumDestination } from './medium';
-import { DIAL_ALIGNMENT, VALVES, valveLevel } from './puzzles';
-import { NPC_ART, pixelTexture } from './sprites';
+import { mediumDestination } from './medium';
+import { DIAL_ALIGNMENT, VALVES, skyAligned, valveLevel } from './puzzles';
+import type { StoryShot, StoryTone } from './story-direction';
+
+const storyLighting: Record<StoryTone, { color: number; light: number; sun: number; sky: number }> = {
+  night: { color: 0xadc6e8, light: 6, sun: 1.55, sky: 1.35 },
+  warm: { color: 0xffc786, light: 17, sun: 2.5, sky: 1.8 },
+  memory: { color: 0x8cefff, light: 31, sun: 1.45, sky: 1.55 },
+  signal: { color: 0x9bf5d2, light: 35, sun: 2.25, sky: 1.7 },
+  rupture: { color: 0xff8961, light: 39, sun: 1.2, sky: 1.3 },
+  shadow: { color: 0xad99fa, light: 18, sun: 0.9, sky: 1.25 },
+  dawn: { color: 0xffcf81, light: 46, sun: 4.2, sky: 2.5 },
+};
+import { pixelTexture } from './sprites';
+import { enemyAttackPose, enemyAttackTiming, enemyMotions, enemyPose, type EnemyMove } from './enemy-motion';
+import { enemyArtKey, NPC_ART } from './character-art';
 import { areaArt, lantern } from './art';
+
+type CombatVisual = CombatEffect | 'roots';
 
 export type Obstacle = { x: number; z: number; w: number; d: number };
 const riverHeight = 0.13;
+const explorationOffset = new THREE.Vector3(24, 28, 34);
+const upAxis = new THREE.Vector3(0, 1, 0);
+const interactionTurns = [0, -30, 30, -60, 60, -90, 90, -125, 125, -155, 155, 180];
 function seeded(seed: number) { return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
 export class World {
   renderer: THREE.WebGLRenderer; scene = new THREE.Scene(); camera: THREE.OrthographicCamera; composer: EffectComposer; bloom: UnrealBloomPass; bokeh: BokehPass;
   root = new THREE.Group(); actorRoot = new THREE.Group(); obstacles: Obstacle[] = []; mapRoads: Obstacle[] = []; mapWater: Obstacle[] = []; private highlightRing?: THREE.Mesh; sprites = new Map<string, THREE.Sprite>();
   player!: THREE.Sprite; companion!: THREE.Sprite; particles!: THREE.Points; water: THREE.Mesh[] = []; lamps = new Map<string, THREE.Group>();
   clock = new THREE.Clock(); private objects: Interactable[] = []; private battle = false; private tex = new Map<string, THREE.CanvasTexture>(); private materials = new Map<string, THREE.MeshStandardMaterial>();
-  private combatFx: { sprite: THREE.Sprite; start: number; effect: CombatEffect; phase: 'cast' | 'impact'; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
+  private combatFx: { sprite: THREE.Sprite; start: number; duration: number; effect: CombatVisual; phase: 'cast' | 'impact'; from: THREE.Vector3; to: THREE.Vector3 }[] = [];
   private noise?: THREE.CanvasTexture; private effects: { sprite: THREE.Sprite; start: number; y: number }[] = [];
   private target = new THREE.Vector3(); private cameraFocus = new THREE.Vector3(); private quality: 'high' | 'low' = 'high'; private reduced = false;
+  private story?: StoryShot;
+  private storyStart = 0;
+  private storyBlend = 0;
+  private storyHeight = 8;
+  private interaction?: { center: THREE.Vector3; angle: number; blockers: THREE.Object3D[]; age: number };
+  private interactionBlend = 0;
+  private interactionAngle = 0;
+  private readonly motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  private readonly storyGlow = new THREE.PointLight(0xffffff, 0, 14);
+  private readonly storyFx = new THREE.Group();
+  private readonly storyRings = [0, 1, 2].map(() => new THREE.Mesh(
+    new THREE.RingGeometry(0.92, 1, 48), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide }),
+  ));
+  private readonly storySparks = Array.from({ length: 22 }, () => new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.1), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
+  ));
+  private readonly storyGhost = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
+  private readonly starColumn = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.78, 5.4, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xffdf9a, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
   private viewport = new THREE.Vector2();
   private deviceRatio = 0;
   private resizeTimer?: ReturnType<typeof setTimeout>;
@@ -40,6 +77,11 @@ export class World {
     this.sun.shadow.mapSize.set(2048, 2048); Object.assign(this.sun.shadow.camera, { left: -24, right: 24, top: 24, bottom: -24, near: 1, far: 80 }); this.sun.shadow.bias = -0.001; this.sun.shadow.normalBias = 0.06; this.scene.add(this.sun);
     const rim = new THREE.DirectionalLight(0x86b5dd, 1.2); rim.position.set(15, 12, 15); this.scene.add(rim);
     this.scene.add(this.root, this.actorRoot);
+    this.storyGhost.scale.set(1.65, 2.06, 1);
+    for (const ring of this.storyRings) ring.rotation.x = -Math.PI / 2;
+    this.storyFx.visible = false;
+    this.storyFx.add(this.storyGhost, this.starColumn, ...this.storyRings, ...this.storySparks);
+    this.scene.add(this.storyFx, this.storyGlow);
     this.composer = new EffectComposer(this.renderer); this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bokeh = new BokehPass(this.scene, this.camera, { focus: 50, aperture: 0.00006, maxblur: 0.004 }); this.bokeh.enabled = false; this.composer.addPass(this.bokeh);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1280, 720), 0.32, 0.65, 1.08); this.composer.addPass(this.bloom); this.composer.addPass(new OutputPass());
@@ -70,7 +112,7 @@ export class World {
   private sprite(kind: string, x: number, z: number, id: string, scale = 1) {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.texture(kind), depthWrite: false, alphaTest: 0.1 }));
     s.scale.set(1.5 * scale, 1.875 * scale, 1); s.position.set(x, 0.98 * scale, z); this.actorRoot.add(s); this.sprites.set(id, s);
-    const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.38 * scale, 12), new THREE.MeshBasicMaterial({ color: 0x132f32, transparent: true, opacity: 0.35, depthWrite: false })); shadow.rotation.x = -Math.PI / 2; shadow.position.set(x, 0.055, z); this.actorRoot.add(shadow); s.userData.shadow = shadow; s.userData.kind = kind; s.userData.restPosition = s.position.clone(); return s;
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.38 * scale, 12), new THREE.MeshBasicMaterial({ color: 0x132f32, transparent: true, opacity: 0.35, depthWrite: false })); shadow.rotation.x = -Math.PI / 2; shadow.position.set(x, 0.055, z); this.actorRoot.add(shadow); s.userData.shadow = shadow; s.userData.kind = kind; s.userData.restPosition = s.position.clone(); s.userData.restScale = s.scale.clone(); return s;
   }
   private lamp(x: number, z: number, id: string, blue = false) {
     const g = new THREE.Group(); g.position.set(x, 0, z); this.root.add(g); this.lamps.set(id, g);
@@ -165,6 +207,7 @@ export class World {
     }
   }
   build(state: GameState, keepCamera = false) {
+    this.endInteraction();
     this.disposeGroup(this.root); this.disposeGroup(this.actorRoot); this.sprites.clear(); this.effects.forEach(e => { e.sprite.material.map?.dispose(); e.sprite.material.dispose(); }); this.effects = []; this.combatFx = []; this.obstacles = []; this.mapRoads = [{x:0,z:0,w:2.8,d:22},{x:0,z:1.8,w:22,d:2.8}]; this.mapWater = []; this.water = []; this.lamps.clear(); this.objects = areaObjects(state); this.battle = false; this.beams = []; this.gate = undefined;
     const rng = seeded(ZONE_ORDER_INDEX[state.zone] * 77 + 50); const zone = state.zone;
     const art = areaArt[zone];
@@ -193,12 +236,12 @@ export class World {
       for (let i = 0; i < 6; i++) this.box(5.5 + i * 0.38, 1.16, 4.8, 0.22, 0.18, 0.3, i % 2 ? 0xb98b58 : 0xb5aa75);
       this.cylinder(-1, 0.28, 0, 2, 0.5, 0x8a9581, 12); this.cylinder(-1, 0.56, 0, 1.6, 0.16, 0xb0b39a, 12);
       this.cylinder(-1, 0.8, 0, 1.2, 0.3, 0x577e75, 12); this.cylinder(-1, 1.1, 0, 0.3, 0.9, 0x9ca78d, 8);
-      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.55), this.material(0xffd494, true)); crystal.position.set(-1, 2, 0); this.root.add(crystal); this.obstacles.push({ x: -1, z: 0, w: 3.1, d: 3.1 });
+      const lit = state.flags.includes('ending');
+      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.55), this.material(lit ? 0xffd494 : 0x5d818c, lit)); crystal.position.set(-1, 2, 0); this.root.add(crystal); this.obstacles.push({ x: -1, z: 0, w: 3.1, d: 3.1 });
       for (const [x, z] of [[-11, -6], [-12, 3], [4, -8], [10, -8], [-13, 9], [15, 8], [15, -8]]) this.tree(x, z, 1.1, rng);
       const oldLantern = ZONES.village.objects.find(o => o.id === 'bridge-lantern')!;
       this.lamp(oldLantern.x, oldLantern.z, oldLantern.id);
       for (const [x, z] of [[4, 5], [-3, -5], [3, -5], [-10, 4]]) this.lamp(x, z, `street-${x}-${z}`);
-      this.sprite('elder', -3, 2, 'elder'); this.sprite('merchant', 7, 4, 'merchant'); this.sprite('child', -7, 7, 'child', 0.85);
       if (state.flags.includes('C6-04')) this.lamp(5, 0, 'village-public-light', true);
       for (let j = 0; j < 5; j++) { this.box(-3.8, 0.4, -7 + j * 1.5, 0.13, 0.85, 0.13, 0x8c8f71); this.box(-3.8, 0.5, -6.4 + j * 1.5, 0.1, 0.1, 1.5, 0x9c9a7b); }
     } else if (zone === 'forest') {
@@ -208,7 +251,7 @@ export class World {
         ...MEDIUM_QUESTS.flatMap(quest => quest.stops).filter(stop => stop.zone === zone).map(({ point }) => [point.x, point.z])];
       for (let i = 0; i < 47; i++) { const x = (rng() - 0.5) * 30; const z = (rng() - 0.5) * 24;
         if (Math.abs(x) < 3 || (z > 0 && z < 4) || ZONES[zone].objects.some(o => Math.hypot(o.x - x, o.z - z) < 2.2) || ZONES[zone].encounters.some(e => Math.hypot(e.x - x, e.z - z) < 1.5)) continue;
-        const keepClear = isMedium(state) && storySpots.some(([px, pz]) => Math.hypot(px - x, pz - z) < 1.6);
+        const keepClear = storySpots.some(([px, pz]) => Math.hypot(px - x, pz - z) < 1.6);
         const size = 0.85 + rng() * 0.55;
         if (keepClear) continue;
         this.tree(x, z, size, rng, i % 3 === 0);
@@ -253,7 +296,7 @@ export class World {
       const start = this.root.children.length;
       if (o.kind === 'lore') { this.box(o.x, 0.45, o.z, 0.72, 0.9, 0.32, 0x939b87); this.box(o.x, 0.96, o.z, 0.82, 0.12, 0.42, 0xbbbd9e); for (let line = 0; line < 3; line++) this.box(o.x, 0.7 - line * 0.14, o.z + 0.17, 0.4 - line * 0.08, 0.025, 0.015, 0xd9ca98, this.root, true); }
       if (o.kind === 'lamp') this.lamp(o.x, o.z, o.id, true);
-      if (o.kind === 'npc' && NPC_ART[o.id]) this.sprite(o.id, o.x, o.z, o.id);
+      if (o.kind === 'npc' && Object.hasOwn(NPC_ART, o.id)) this.sprite(o.id, o.x, o.z, o.id, o.id === 'child' ? 0.85 : 1);
       if (o.kind === 'story') {
         const optional = o.id.startsWith('sq') || o.id.startsWith('H');
         this.cylinder(o.x, 0.22, o.z, optional ? 0.27 : 0.56, 0.44, 0x69706e);
@@ -289,7 +332,11 @@ export class World {
     }
     this.highlightRing = new THREE.Mesh(new THREE.RingGeometry(0.62,0.72,32),new THREE.MeshBasicMaterial({color:0xffdd95,transparent:true,opacity:0.8,side:THREE.DoubleSide,depthWrite:false})); this.highlightRing.rotation.x=-Math.PI/2; this.highlightRing.visible=false; this.root.add(this.highlightRing);
     this.addParticles(rng); this.sync(state);
-    if (!keepCamera) this.cameraFocus.set(0, 0, 0);
+    if (!keepCamera) {
+      this.cameraFocus.set(0, 0, 0);
+      this.interactionAngle = 0;
+      this.interactionBlend = 0;
+    }
   }
   private outerLandmarks(zone: ZoneId, state: GameState) {
     if (zone === 'station') {
@@ -384,7 +431,7 @@ export class World {
     if (state.flags.includes('ending')) { this.scene.background = new THREE.Color('#697c88'); this.scene.fog = new THREE.FogExp2('#697c88', 0.012); this.sun.color.set(0xffdc9b); }
     if (this.gate) {
       const exit = ZONES[state.zone].objects.find(o => o.kind === 'exit');
-      this.gate.visible = isMedium(state) && state.zone !== 'tower' && exit ? !mediumDestination(state, exit.id) : !puzzleSolved(state);
+      this.gate.visible = state.zone === 'tower' ? !skyAligned(state) : !!exit && !mediumDestination(state, exit.id);
     }
     const up = new THREE.Vector3(0, 1, 0);
     for (const { mesh, id, value, start, direction } of this.beams) {
@@ -397,11 +444,17 @@ export class World {
       mesh.quaternion.setFromUnitVectors(up, ray.normalize());
     }
     if (state.zone === 'waterway') this.water.forEach((w, i) => { w.position.y = riverHeight - valveLevel(state, VALVES[i]) * 0.012; });
+    const collected = new Set(this.objects.filter(object => isCollected(state, object)).map(object => object.id));
+    if (collected.size) {
+      this.objects = this.objects.filter(object => !collected.has(object.id));
+      for (const prop of this.root.children) {
+        if (collected.has(prop.userData.interactable)) prop.visible = false;
+      }
+    }
     for (const [id, g] of this.lamps) {
       if (id.startsWith('beacon')) g.children.forEach(child => { if (child instanceof THREE.PointLight) child.intensity = state.mechanisms[id] ? 6 : 0; if (child instanceof THREE.Mesh && (child.material as THREE.MeshStandardMaterial).emissiveIntensity > 1) child.visible = !!state.mechanisms[id]; });
       if (id.startsWith('dial')) g.rotation.y = (state.mechanisms[id] ?? 0) * Math.PI / 2;
       if (id.startsWith('valve')) g.rotation.y = valveLevel(state, id) * Math.PI / 2;
-      if (id.includes('chest') || id.startsWith('herb') || id === 'pendant' || id === 'loren-memory') g.visible = !state.flags.includes(id);
     }
     for (const id of state.defeated) { const s = this.sprites.get(id); if (s) { s.visible = false; s.userData.shadow.visible = false; } }
     this.configure(state.settings.quality, state.settings.reducedMotion);
@@ -424,6 +477,7 @@ export class World {
     if (this.quality !== quality) { this.quality = quality; this.renderer.shadowMap.enabled = quality === 'high'; }
     this.reduced = reduced; if (this.particles) this.particles.visible = !reduced && quality === 'high';
   }
+  get reducedBattleMotion() { return this.reduced || this.motionPreference.matches; }
   canWalk(x: number, z: number) { return Math.abs(x) < 14 && Math.abs(z) < 11 && !this.obstacles.some(o => Math.abs(x - o.x) < o.w / 2 + 0.25 && Math.abs(z - o.z) < o.d / 2 + 0.25); }
   showBattle(b: Battle) {
     this.battle = true; this.disposeGroup(this.actorRoot); this.sprites.clear(); this.combatFx = []; this.effects.forEach(e => e.sprite.material.map?.dispose()); this.effects = [];
@@ -433,11 +487,14 @@ export class World {
   syncBattle(b: Battle) {
     for (const a of [...b.heroes, ...b.enemies]) {
       const s = this.sprites.get(a.id); if (!s) continue;
-      s.material.opacity = a.hp > 0 ? 1 : 0.2; s.userData.shadow.visible = a.hp > 0;
-      if ('template' in a && a.template === 'guardian') {
+      s.userData.shadow.visible = a.hp > 0;
+      if ('template' in a) {
+        s.userData.kind = enemyArtKey(a.template, a.phase);
         s.userData.charging = a.charging && !a.broken;
-        if (!s.userData.attack) s.material.map = this.texture('guardian', s.userData.charging ? 2 : 0);
-      }
+        s.userData.broken = a.broken;
+        s.userData.defeatedAt = a.hp > 0 ? undefined : s.userData.defeatedAt ?? this.clock.elapsedTime;
+        if (a.hp <= 0 && this.reducedBattleMotion) s.material.opacity = 0.2;
+      } else s.material.opacity = a.hp > 0 ? 1 : 0.2;
     }
   }
   numberEffect(id: string, amount: number, healing = false) {
@@ -448,11 +505,11 @@ export class World {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false })); sprite.scale.set(1.8, 0.9, 1); sprite.position.copy(target.position).add(new THREE.Vector3(0, 1.2, 0)); sprite.renderOrder = 100;
     this.actorRoot.add(sprite); this.effects.push({ sprite, start: this.clock.elapsedTime, y: sprite.position.y });
   }
-  private combatTexture(effect: CombatEffect) {
+  private combatTexture(effect: CombatVisual) {
     const key = `combat-${effect}`; if (this.tex.has(key)) return this.tex.get(key)!;
     const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
     const c = canvas.getContext('2d')!;
-    const colors: Record<CombatEffect, string> = { slash: '#e5b980', fire: '#ff9a56', star: '#9de7e1', resonance: '#ffcf83', heal: '#b6ecc5' };
+    const colors: Record<CombatVisual, string> = { slash: '#e5b980', fire: '#ff9a56', star: '#9de7e1', resonance: '#ffcf83', heal: '#b6ecc5', roots: '#c6945e' };
     const pixel = (color: string, x: number, y: number, w: number, h: number) => {
       c.fillStyle = color; c.fillRect(x, y, w, h);
     };
@@ -464,6 +521,14 @@ export class World {
         if (curve > 7) pixel('#fff2cd', 13 + curve, y, 1, 1);
       }
       pixel('#fff2cd', 9, 15, 11, 2); pixel('#fff2cd', 13, 11, 2, 10);
+    } else if (effect === 'roots') {
+      for (let x = 2; x < 30; x++) {
+        const y = 7 + Math.floor((x - 16) ** 2 / 17);
+        pixel('#7b5439', x, y, 1, 5);
+        pixel(colors.roots, x, y, 1, 2);
+      }
+      pixel('#e4b77b', 2, 17, 4, 2); pixel('#e4b77b', 25, 14, 5, 2);
+      for (const [x, y] of [[6, 9], [10, 17], [22, 13], [27, 21]]) pixel('#aa8059', x, y, 2, 2);
     } else if (effect === 'fire') {
       pixel('#c15f50', 8, 16, 16, 9); pixel(colors.fire, 10, 11, 13, 15);
       pixel(colors.fire, 13, 6, 6, 8); pixel('#ffca7c', 12, 16, 8, 9);
@@ -481,21 +546,78 @@ export class World {
     }
     const texture = new THREE.CanvasTexture(canvas); texture.magFilter = texture.minFilter = THREE.NearestFilter; texture.colorSpace = THREE.SRGBColorSpace; this.tex.set(key, texture); return texture;
   }
-  private spawnCombatEffect(from: THREE.Vector3, to: THREE.Vector3, effect: CombatEffect, phase: 'cast' | 'impact') {
+  private spawnCombatEffect(from: THREE.Vector3, to: THREE.Vector3, effect: CombatVisual, phase: 'cast' | 'impact', delay = 0) {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.combatTexture(effect), transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending }));
-    sprite.renderOrder = 20; sprite.position.copy(from); this.actorRoot.add(sprite);
-    this.combatFx.push({ sprite, from: from.clone(), to: to.clone(), effect, phase, start: this.clock.elapsedTime });
+    sprite.renderOrder = 20; sprite.position.copy(from); sprite.material.opacity = delay ? 0 : 1; this.actorRoot.add(sprite);
+    const duration = phase === 'cast' ? delay ? enemyAttackTiming.impact / 1000 - delay : .24 : .38;
+    this.combatFx.push({ sprite, from: from.clone(), to: to.clone(), effect, phase, start: this.clock.elapsedTime + delay, duration });
   }
-  attackEffect(source: string | undefined, target: string, effect: CombatEffect) {
-    const attacker = source ? this.sprites.get(source) : undefined; const victim = this.sprites.get(target); if (!victim) return;
-    const from = (attacker ?? victim).position.clone().add(new THREE.Vector3(0,0.4,0)); const to = victim.position.clone().add(new THREE.Vector3(0,0.3,0));
-    if (!this.reduced && attacker) attacker.userData.attack = { start: this.clock.elapsedTime, origin: attacker.position.clone(), destination: victim.position.clone(), effect };
-    if (!this.reduced) this.spawnCombatEffect(from, to, effect, 'cast');
+  attackEffect(source: string | undefined, target: string, effect: CombatEffect, move?: EnemyMove) {
+    const attacker = source ? this.sprites.get(source) : undefined;
+    const victim = this.sprites.get(target); if (!victim || this.reducedBattleMotion) return;
+    const from = (attacker ?? victim).position.clone().add(new THREE.Vector3(0,0.4,0));
+    const to = victim.position.clone().add(new THREE.Vector3(0,0.3,0));
+    if (attacker) {
+      const origin = attacker.userData.restPosition as THREE.Vector3;
+      const heading = victim.position.clone().sub(origin).setY(0).normalize();
+      attacker.userData.attack = { start: this.clock.elapsedTime, origin: attacker.position.clone(), heading, effect, move };
+    }
+    this.spawnCombatEffect(from, to, move === 'sweep' ? 'roots' : effect, 'cast', move ? .09 : 0);
   }
-  hitEffect(id: string, effect: CombatEffect) {
+  hitEffect(id: string, effect: CombatEffect, source?: string, stagger = false) {
     const victim = this.sprites.get(id); if (!victim) return;
-    const center = victim.position.clone().add(new THREE.Vector3(0,0.25,0)); this.spawnCombatEffect(center, center, effect, 'impact');
-    if (effect !== 'heal' && !this.reduced) { victim.userData.flashUntil = this.clock.elapsedTime + 0.18; victim.userData.hit = { start: this.clock.elapsedTime, origin: victim.position.clone() }; }
+    const center = victim.position.clone().add(new THREE.Vector3(0,0.25,0));
+    this.spawnCombatEffect(center, center, effect, 'impact');
+    if (effect !== 'heal' && !this.reducedBattleMotion) {
+      const attacker = source ? this.sprites.get(source) : undefined;
+      const origin = victim.position.clone();
+      const heading = attacker ? origin.clone().sub(attacker.userData.restPosition).setY(0).normalize() : new THREE.Vector3(1, 0, 0);
+      victim.userData.flashUntil = this.clock.elapsedTime + 0.18;
+      victim.userData.hit = { start: this.clock.elapsedTime, origin, heading, stagger };
+    }
+  }
+  private animateEnemy(s: THREE.Sprite, motion: (typeof enemyMotions)[string], t: number, charge: boolean, still: boolean, screenRight: THREE.Vector3) {
+    const { restPosition, restScale, kind, attack, hit, defeatedAt, broken } = s.userData;
+    const idle = motion.idle;
+    const beat = (t + restPosition.x * 0.21) / idle.period;
+    const pulse = (1 - Math.cos(beat * Math.PI * 2)) * .5;
+    let frame: number = enemyPose.rest, lift = 0, tilt = 0, squash = 0, facing = this.battle ? 3 : 0;
+    s.position.copy(restPosition);
+    if (defeatedAt !== undefined) {
+      const fall = still ? 1 : Math.min(1, (t - defeatedAt) / .32);
+      frame = enemyPose.broken;
+      s.material.opacity = 1 - fall * .8;
+      if (!still) { tilt = -.28 * fall; squash = -.35 * fall; }
+    } else if (attack && !still) {
+      const progress = (t - attack.start) * 1000 / enemyAttackTiming.duration;
+      const pose = enemyAttackPose(motion, progress, attack.move ?? 'strike');
+      const sign = screenRight.dot(attack.heading) < 0 ? -1 : 1;
+      frame = pose.frame; lift = pose.lift; tilt = sign * -pose.tilt; squash = pose.squash;
+      facing = sign < 0 ? 3 : 1;
+      s.position.addScaledVector(attack.heading, pose.advance);
+    } else if (hit && !still) {
+      const progress = Math.min(1, (t - hit.start) / .30);
+      const recoil = Math.sin(progress * Math.PI) * (hit.stagger ? 1.6 : 1);
+      frame = hit.stagger ? enemyPose.broken : enemyPose.hit;
+      s.position.addScaledVector(hit.heading, recoil * motion.recoil);
+      tilt = (screenRight.dot(hit.heading) < 0 ? 1 : -1) * .21 * recoil;
+      squash = -.18 * recoil;
+    } else if (broken) {
+      frame = enemyPose.broken;
+      if (!still) { tilt = -.12; squash = -.14; }
+    } else if (charge) {
+      frame = enemyPose.ready;
+      if (!still) { tilt = -.05 + pulse * .09; squash = pulse * .07; }
+    } else if (!still) {
+      frame = beat % 1 < .5 ? enemyPose.rest : enemyPose.idle;
+      lift = pulse * (idle.lift ?? 0);
+      tilt = Math.sin(beat * Math.PI * 2) * (idle.tilt ?? 0);
+      squash = pulse * (idle.squash ?? 0);
+    }
+    s.scale.set(restScale.x * (1 - .46 * squash), restScale.y * (1 + squash), 1);
+    s.position.y += lift + (s.scale.y - restScale.y) / 2;
+    s.material.rotation = tilt;
+    s.material.map = this.texture(kind, frame, facing);
   }
   project(position: Vec2, height = 1.4): { x: number; y: number } { const v = new THREE.Vector3(position.x, height, position.z).project(this.camera); return { x: (v.x + 1) * 50, y: (-v.y + 1) * 50 }; }
   pick(clientX: number, clientY: number): { position: Vec2; id?: string; building?: string } | undefined {
@@ -506,7 +628,8 @@ export class World {
       1 - 2 * (clientY - rect.top) / rect.height,
     ), this.camera);
     const scenery = this.root.children.filter(object =>
-      object !== this.highlightRing && !(object instanceof THREE.InstancedMesh) && !(object instanceof THREE.Points),
+      object.visible && object !== this.highlightRing && !(object instanceof THREE.InstancedMesh) && !(object instanceof THREE.Points)
+      && !(this.interactionBlend > 0.5 && this.interaction?.blockers.includes(object)),
     );
     const ground = this.picker.ray.intersectPlane(this.ground, new THREE.Vector3());
     const groundDistance = ground ? this.picker.ray.origin.distanceTo(ground) : Infinity;
@@ -536,75 +659,265 @@ export class World {
     }
     if (ground) return { position: { x: ground.x, z: ground.z } };
   }
-  screenDirection(dx: number, dz: number) { const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0); const forward = new THREE.Vector3().subVectors(new THREE.Vector3(), this.camera.position); forward.y = 0; forward.normalize(); return { x: right.x * dx - forward.x * dz, z: right.z * dx - forward.z * dz }; }
+  screenDirection(dx: number, dz: number) {
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const back = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 2);
+    back.y = 0; back.normalize();
+    return { x: right.x * dx + back.x * dz, z: right.z * dx + back.z * dz };
+  }
+  focusInteraction(player: Vec2, object: Interactable) {
+    this.endInteraction();
+    const sprite = this.sprites.get(object.id);
+    const height = sprite?.userData.restPosition.y ?? (object.kind === 'lamp' || object.id === 'bridge-lantern' ? 1.9 : 0.55);
+    const center = new THREE.Vector3((player.x + object.x) / 2, 1, (player.z + object.z) / 2);
+    const points = [
+      new THREE.Vector3(player.x, 0.75, player.z),
+      new THREE.Vector3(player.x, 1.35, player.z),
+      new THREE.Vector3(object.x, height, object.z),
+    ];
+    if (sprite) points.push(new THREE.Vector3(object.x, height + sprite.scale.y * 0.25, object.z));
+    const scenery = this.root.children.filter(candidate => candidate.visible && candidate !== this.highlightRing
+      && candidate.userData.interactable !== object.id && !(candidate instanceof THREE.InstancedMesh) && !(candidate instanceof THREE.Points));
+    this.root.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster(undefined, undefined, 0, explorationOffset.length() - 0.12);
+    const origin = new THREE.Vector3();
+    let best: { angle: number; blockers: THREE.Object3D[]; score: number } | undefined;
+    for (const degrees of interactionTurns) {
+      const angle = THREE.MathUtils.degToRad(degrees);
+      const offset = explorationOffset.clone().applyAxisAngle(upAxis, angle);
+      const direction = offset.clone().normalize().negate();
+      const right = new THREE.Vector3().crossVectors(direction, upAxis).normalize();
+      const spread = Math.abs((player.x - object.x) * right.x + (player.z - object.z) * right.z);
+      const anchors = [...points];
+      if (sprite) {
+        for (const side of [-1, 1]) anchors.push(points[2].clone().addScaledVector(right, side * sprite.scale.x * 0.22));
+      }
+      const blockers = new Set<THREE.Object3D>();
+      let blockedPoints = 0;
+      for (const point of anchors) {
+        ray.set(origin.copy(point).add(offset), direction);
+        let blocked = false;
+        for (const hit of ray.intersectObjects(scenery)) {
+          let part = hit.object;
+          while (part.visible && part.parent && part.parent !== this.root) part = part.parent;
+          if (!part.visible) continue;
+          blockers.add(part);
+          blocked = true;
+        }
+        if (blocked) blockedPoints++;
+      }
+      if (degrees === 0 && blockedPoints === 0) return;
+      const score = blockedPoints * 10 + blockers.size + (sprite && spread < 0.9 ? 1 : 0);
+      if (!best || score < best.score || score === best.score && best.angle === 0) {
+        best = { angle, blockers: [...blockers], score };
+      }
+      if (score === 0) break;
+    }
+    if (best) this.interaction = { center, angle: best.angle, blockers: best.blockers, age: 0 };
+  }
+  get interactionRevealPending() {
+    return this.interaction !== undefined && this.interaction.age < 0.42;
+  }
+  endInteraction() { this.interaction = undefined; }
+  stageStory(shot?: StoryShot) {
+    if (!shot?.effect || shot.effect !== this.story?.effect || shot.tone !== this.story?.tone) {
+      this.storyStart = this.clock.getElapsedTime();
+    }
+    this.story = shot;
+    if (!shot) {
+      this.storyFx.visible = false;
+      this.storyGlow.intensity = 0;
+      this.sun.intensity = 2.7;
+      this.sky.intensity = 1.9;
+    }
+  }
+  private face(dx: number, dz: number) {
+    const m = this.camera.matrixWorld.elements;
+    const horizontal = dx * m[0] + dz * m[2];
+    const vertical = dx * m[4] + dz * m[6];
+    return Math.abs(horizontal) > Math.abs(vertical) ? horizontal > 0 ? 1 : 3 : vertical > 0 ? 2 : 0;
+  }
+  private storyLight(state: GameState, shot: StoryShot, t: number, dt: number, still: boolean) {
+    const light = shot.tone && storyLighting[shot.tone];
+    const anchor = shot.landmark ?? state.position;
+    const age = still ? 1 : Math.max(0, t - this.storyStart);
+    const blend = still ? 1 : 1 - Math.exp(-dt * 6);
+    const tint = light ? light.color : 0xffdab0;
+    this.sun.intensity = THREE.MathUtils.lerp(this.sun.intensity, light ? light.sun : 2.7, blend);
+    this.sky.intensity = THREE.MathUtils.lerp(this.sky.intensity, light ? light.sky : 1.9, blend);
+    this.storyGlow.color.setHex(tint);
+    this.storyGlow.position.set(anchor.x, 2.9, anchor.z);
+    this.storyGlow.intensity = THREE.MathUtils.lerp(this.storyGlow.intensity, light ? light.light : 0, blend);
+    this.storyFx.visible = !!shot.effect;
+    if (!shot.effect) return;
+    this.storyFx.position.set(anchor.x, 0, anchor.z);
+    const echo = shot.effect === 'echo';
+    const dawn = shot.effect === 'dawn';
+    const burst = shot.effect === 'burst';
+    const travel = Math.min(1, age / (burst ? 0.7 : 1.45));
+    this.starColumn.visible = dawn;
+    if (dawn) {
+      this.starColumn.scale.y = 0.12 + travel * 0.88;
+      this.starColumn.position.y = 0.6 + 2.7 * this.starColumn.scale.y;
+      this.starColumn.material.opacity = 0.18 * travel;
+    }
+    this.storyRings.forEach((ring, i) => {
+      ring.visible = !echo && (!still || i === 0);
+      ring.position.set(0, (dawn ? 0.36 : 0.16) + i * 0.035, 0);
+      ring.scale.setScalar(0.65 + (dawn ? 5.7 : 3.3) * Math.max(0, travel - i * 0.18));
+      ring.material.color.setHex(tint);
+      ring.material.opacity = 0.44 - travel * 0.23 - i * 0.08;
+    });
+    this.storySparks.forEach((spark, i) => {
+      spark.visible = !still || i < 6;
+      const angle = i * 2.4 + (echo && !still ? age * 0.16 : 0);
+      const radius = echo ? 0.45 + (i % 7) * 0.22 : (0.55 + i % 8 * 0.61) * (0.12 + travel * 0.88);
+      spark.position.set(Math.cos(angle) * radius, 0.35 + (i % 6) * 0.25 + (dawn ? travel * (i % 9) * 0.72 : travel * 0.3), Math.sin(angle) * radius);
+      spark.scale.setScalar(i % 4 === 0 ? 1.15 : 0.48);
+      spark.material.color.setHex(i % 3 ? tint : 0xffecd2);
+      spark.material.opacity = burst ? 0.86 - travel * 0.63 : 0.32 + travel * 0.46;
+    });
+    this.storyGhost.visible = !!shot.ghost;
+    if (shot.ghost) {
+      this.storyGhost.position.set(-0.45, 1.2 + (still ? 0 : Math.sin(age * 2) * 0.09), -0.55);
+      this.storyGhost.material.map = this.texture(shot.ghost);
+      this.storyGhost.material.color.setHex(tint);
+      this.storyGhost.material.opacity = still ? 0.53 : Math.min(0.53, age * 1.5);
+    }
+  }
   render(state: GameState, moving: boolean, mode: string, dx = 0, dz = 0, atBridge = false) {
     if (window.devicePixelRatio !== this.deviceRatio) this.resize();
     const aspect = this.viewport.x / this.viewport.y;
     if (mode !== 'explore' && this.highlightRing) this.highlightRing.visible = false;
     if (this.highlightRing) this.highlightRing.scale.setScalar(this.reduced ? 1 : 1 + Math.sin(this.clock.elapsedTime * 3)*0.06);
     const t = this.clock.getElapsedTime(); this.bokeh.enabled = ['title', 'ending'].includes(mode) && !this.reduced; const dt = Math.min(0.05, t - this.lastTime); this.lastTime = t;
+    if (this.interaction) this.interaction.age += dt;
+    if (mode === 'explore' && this.interaction && (moving || this.interaction.age > 1.2)) this.endInteraction();
+    const interaction = this.interaction;
+    const shot = this.story;
+    const still = this.reduced || ((shot || interaction || this.interactionBlend > 0.01) && this.motionPreference.matches);
+    const actor = shot?.actor ? this.sprites.get(shot.actor) : undefined;
+    const speaker = shot?.speaker ? this.sprites.get(shot.speaker) : undefined;
+    const landmark = actor?.position ?? shot?.landmark;
     if (!this.battle && this.player) {
       this.player.position.set(state.position.x, 0.98 + (!this.reduced && moving ? Math.sin(t * 14) * 0.035 : 0), state.position.z);
       if (moving) {
-        const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
-        const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
-        const horizontal = dx * right.x + dz * right.z;
-        const vertical = dx * up.x + dz * up.z;
-        this.direction = Math.abs(horizontal) > Math.abs(vertical) ? horizontal > 0 ? 1 : 3 : vertical > 0 ? 2 : 0;
+        this.direction = this.face(dx, dz);
       }
       const frame = moving && !this.reduced ? Math.floor(t * 8) % 4 : 0;
       this.player.material.map = this.texture(state.leaderId, frame, this.direction);
-      const desired = new THREE.Vector3(state.position.x + 0.8, 0.98, state.position.z + 0.9); this.companion.position.lerp(desired, 1 - Math.exp(-dt * 5));
+      const desired = new THREE.Vector3(state.position.x + 0.8, 0.98, state.position.z + 0.9);
+      if (shot && !still) {
+        const right = this.camera.matrixWorld.elements;
+        for (const side of [1, -1]) {
+          const x = state.position.x + right[0] * 1.65 * side;
+          const z = state.position.z + right[2] * 1.65 * side;
+          if (this.canWalk(x, z)) { desired.set(x, 0.98, z); break; }
+        }
+      }
+      this.companion.position.lerp(desired, 1 - Math.exp(-dt * 5));
       this.companion.material.map = this.texture(state.leaderId === 'lien' ? 'loren' : 'lien', frame, this.direction);
+      if (shot && !still) {
+        for (const [hero, partner] of [[this.player, this.companion], [this.companion, this.player]]) {
+          const toward = speaker === hero ? (actor && actor !== hero ? actor.position : partner.position)
+            : speaker?.position ?? landmark ?? partner.position;
+          hero.material.map = this.texture(hero.userData.kind, shot.gesture === hero.userData.kind ? 4 : 0,
+            this.face(toward.x - hero.position.x, toward.z - hero.position.z));
+        }
+      }
       for (const s of [this.player, this.companion]) s.userData.shadow.position.set(s.position.x, 0.07, s.position.z);
     }
+    const reducedBattleMotion = this.reducedBattleMotion;
+    const screenRight = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
     for (const [id, s] of this.sprites) {
-      if (id === 'forest-elite') s.material.map = this.texture('guardian', atBridge ? 2 : 0);
-      if (id !== 'lien' && id !== 'loren' && !['elder', 'merchant', 'child'].includes(id) && !this.reduced && !s.userData.attack && !s.userData.hit) s.position.y = s.userData.restPosition.y + Math.sin(t * 2 + s.position.x) * 0.035;
-      const attack = s.userData.attack;
-      if (attack) {
-        const p = Math.min(1, (t - attack.start) / 0.58); const arc = Math.sin(p * Math.PI);
-        s.position.copy(attack.origin);
-        if (attack.effect === 'slash') { const direction = attack.destination.clone().sub(attack.origin); direction.y = 0; s.position.addScaledVector(direction.normalize(), arc * 0.9); s.material.rotation = arc * -0.14; }
-        else s.position.y += arc * 0.18;
-        const side = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
-        const facing = side.dot(attack.destination.clone().sub(attack.origin)) < 0 ? 3 : 1;
-        s.material.map = this.texture(s.userData.kind, p < 0.8 ? 4 : 0, facing);
-        if (p >= 1) { s.position.copy(attack.origin); s.material.rotation = 0; s.material.map = this.texture(s.userData.kind, s.userData.charging ? 2 : 0); delete s.userData.attack; }
-      }
-      const hit = s.userData.hit;
-      if (hit) {
-        const p = Math.min(1, (t - hit.start) / 0.35); s.position.copy(hit.origin); s.position.x += Math.sin(p * Math.PI * 3) * (1-p) * 0.2; s.material.rotation = Math.sin(p * Math.PI) * 0.12;
-        if (p >= 1) { s.position.copy(hit.origin); s.material.rotation = 0; delete s.userData.hit; }
+      if (!s.visible) continue;
+      const { kind, attack, hit } = s.userData;
+      const motion = enemyMotions[kind];
+      if (motion) {
+        if (attack && t - attack.start >= enemyAttackTiming.duration / 1000) delete s.userData.attack;
+        if (hit && t - hit.start >= .30) delete s.userData.hit;
+        this.animateEnemy(s, motion, t, s.userData.charging || id === 'forest-elite' && atBridge, reducedBattleMotion, screenRight);
+      } else {
+        if (attack) {
+          const p = Math.min(1, (t - attack.start) / 0.58); const arc = Math.sin(p * Math.PI);
+          s.position.copy(attack.origin);
+          if (!reducedBattleMotion && attack.effect === 'slash') {
+            s.position.addScaledVector(attack.heading, arc * 0.9); s.material.rotation = arc * -0.14;
+          } else if (!reducedBattleMotion) s.position.y += arc * 0.18;
+          const direction = screenRight.dot(attack.heading) < 0 ? 3 : 1;
+          s.material.map = this.texture(kind, !reducedBattleMotion && p < 0.8 ? 4 : 0, direction);
+          if (p >= 1) { s.material.rotation = 0; delete s.userData.attack; }
+        }
+        if (hit) {
+          const p = Math.min(1, (t - hit.start) / 0.35);
+          s.position.copy(hit.origin);
+          if (!reducedBattleMotion) {
+            s.position.x += Math.sin(p * Math.PI * 3) * (1-p) * 0.2; s.material.rotation = Math.sin(p * Math.PI) * 0.12;
+          } else s.material.rotation = 0;
+          if (p >= 1) { s.material.rotation = 0; delete s.userData.hit; }
+        }
       }
       if (this.battle) s.userData.shadow.position.set(s.position.x, 0.07, s.position.z);
-      s.material.color.set(s.userData.flashUntil > t ? 0xffa979 : 0xffffff);
+      s.material.color.set(!reducedBattleMotion && s.userData.flashUntil > t ? 0xffa979 : 0xffffff);
     }
     this.combatFx = this.combatFx.filter(fx => {
-      const duration = fx.phase === 'cast' ? 0.24 : this.reduced ? 0.06 : 0.38; const p = Math.min(1, (t - fx.start) / duration);
+      if (t < fx.start && !reducedBattleMotion) return true;
+      const duration = reducedBattleMotion ? 0.06 : fx.duration;
+      const p = reducedBattleMotion && fx.phase === 'cast' ? 1 : Math.min(1, (t - fx.start) / duration);
       if (p >= 1) { fx.sprite.removeFromParent(); fx.sprite.material.dispose(); return false; }
       fx.sprite.position.lerpVectors(fx.from, fx.to, fx.phase === 'cast' ? p : 1);
-      const size = this.reduced ? 0.85 : fx.phase === 'cast' ? fx.effect === 'slash' ? 1.4 : 0.7 + p * 0.5 : (fx.effect === 'resonance' ? 3.6 : 2) * (0.5 + p);
+      const size = reducedBattleMotion ? 0.85 : fx.phase === 'cast' ? fx.effect === 'roots' ? 2.8 : fx.effect === 'slash' ? 1.4 : 0.7 + p * 0.5 : (fx.effect === 'resonance' ? 3.6 : 2) * (0.5 + p);
       fx.sprite.scale.setScalar(size); fx.sprite.material.opacity = fx.phase === 'cast' ? Math.sin(p*Math.PI) : 1-p;
-      if (!this.reduced) fx.sprite.material.rotation = fx.effect === 'slash' ? -0.7 + p*1.4 : p*0.6;
+      if (!reducedBattleMotion) fx.sprite.material.rotation = fx.effect === 'slash' ? -0.7 + p*1.4 : p*0.6;
       return true;
     });
     this.effects = this.effects.filter(effect => {
       const age = t - effect.start; if (age > 0.9) { effect.sprite.removeFromParent(); effect.sprite.material.map?.dispose(); effect.sprite.material.dispose(); return false; }
-      effect.sprite.position.y = effect.y + (this.reduced ? 0 : age * 1.6); effect.sprite.material.opacity = Math.min(1, (0.9 - age) * 3); return true;
+      effect.sprite.position.y = effect.y + (reducedBattleMotion ? 0 : age * 1.6); effect.sprite.material.opacity = Math.min(1, (0.9 - age) * 3); return true;
     });
     if (this.particles && !this.reduced) this.particles.rotation.y = Math.sin(t * 0.04) * 0.08;
     this.water.forEach(w => { (w.material as THREE.MeshStandardMaterial).opacity = 0.8 + Math.sin(t * 0.8) * 0.05; });
     const follow = THREE.MathUtils.smoothstep(aspect, 0.75, 1.55);
     this.target.set(atBridge || this.battle ? 0 : mode === 'title' ? -3.5 * follow : state.position.x * (1 - 0.55 * follow), 0, atBridge ? -8.4 : this.battle ? 0 : mode === 'title' ? -1 : state.position.z * (1 - 0.65 * follow));
-    this.cameraFocus.lerp(this.target, this.reduced ? 1 : 1 - Math.exp(-dt * (atBridge ? 3.8 : 2.8)));
-    const height = atBridge ? Math.max(8.2, 4 / aspect) : this.battle ? Math.max(9.2, 8.5 / aspect) : mode === 'title' ? 13.6 : Math.max(11.8, 8 / aspect);
-    const shift = this.battle ? height * 0.22 * (1 - follow) : 0;
+    const baseHeight = atBridge ? Math.max(8.2, 4 / aspect) : this.battle ? Math.max(9.2, 8.5 / aspect) : mode === 'title' ? 13.6 : Math.max(11.8, 8 / aspect);
+    if (shot) this.storyLight(state, { ...shot, landmark }, t, dt, !!still);
+    const cinematic = shot && !still;
+    if (cinematic) {
+      const lien = this.sprites.get('lien')!.position;
+      const loren = this.sprites.get('loren')!.position;
+      this.target.copy(lien).lerp(loren, 0.5);
+      if (shot.focus === 'landmark' && landmark) this.target.set(landmark.x, actor ? actor.position.y * 0.8 : 1.25, landmark.z);
+      if (shot.focus === 'speaker') {
+        if (speaker?.visible) this.target.lerp(speaker.position, 0.78);
+        else if (landmark) this.target.lerp(new THREE.Vector3(landmark.x, 1.25, landmark.z), 0.6);
+      }
+      const size = shot.wide ? 8.9 : shot.focus === 'party' ? 5.6 : 5;
+      this.storyHeight = THREE.MathUtils.lerp(this.storyHeight, Math.max(size, (shot.wide ? 6.4 : 3.8) / aspect), 1 - Math.exp(-dt * 4));
+    } else if (this.storyBlend < 0.01) this.storyHeight = baseHeight;
+    this.storyBlend = still ? 0 : THREE.MathUtils.lerp(this.storyBlend, cinematic ? 1 : 0, 1 - Math.exp(-dt * 5));
+    const turn = still ? 1 : 1 - Math.exp(-dt * (interaction ? 12 : 8));
+    this.interactionBlend = THREE.MathUtils.lerp(this.interactionBlend, interaction ? 1 : 0, turn);
+    this.interactionAngle = THREE.MathUtils.lerp(this.interactionAngle, interaction?.angle ?? 0, turn);
+    if (interaction) this.target.copy(interaction.center);
+    this.cameraFocus.lerp(this.target, interaction ? turn : still ? 1 : 1 - Math.exp(-dt * (cinematic ? 4.2 : atBridge ? 3.8 : 2.8)));
+    const storyViewHeight = THREE.MathUtils.lerp(baseHeight, this.storyHeight, this.storyBlend);
+    const height = THREE.MathUtils.lerp(storyViewHeight, Math.max(4.5, 3.8 / aspect), this.interactionBlend);
+    const normalShift = Math.max(this.storyBlend * height * 0.24, this.battle ? height * 0.22 * (1 - follow) : 0);
+    const shift = THREE.MathUtils.lerp(normalShift, height * 0.38, this.interactionBlend);
     this.camera.left = -height * aspect; this.camera.right = height * aspect;
     this.camera.top = height - shift; this.camera.bottom = -height - shift;
     this.camera.updateProjectionMatrix();
-    this.camera.position.copy(this.cameraFocus).add(new THREE.Vector3(atBridge ? 11 : 24, 28, 34)); this.camera.lookAt(this.cameraFocus); this.camera.updateMatrixWorld();
-    if (this.quality === 'high') this.composer.render(); else this.renderer.render(this.scene, this.camera);
+    const offset = new THREE.Vector3(atBridge ? 11 : 24 - this.storyBlend * 8, 28 - this.storyBlend * 5, 34);
+    offset.lerp(explorationOffset, this.interactionBlend).applyAxisAngle(upAxis, this.interactionAngle);
+    this.camera.position.copy(this.cameraFocus).add(offset); this.camera.lookAt(this.cameraFocus); this.camera.updateMatrixWorld();
+    // A roof directly above both subjects can block every angle.
+    const blockers = this.interactionBlend > 0.5 ? interaction?.blockers.filter(part => part.visible) ?? [] : [];
+    for (const part of blockers) part.visible = false;
+    try {
+      if (this.quality === 'high') this.composer.render(); else this.renderer.render(this.scene, this.camera);
+    } finally {
+      for (const part of blockers) part.visible = true;
+    }
   }
   resize(immediate = false) {
     const { width, height } = this.renderer.domElement.getBoundingClientRect();

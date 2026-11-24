@@ -1,6 +1,5 @@
 import { ALL_ZONES as ZONES, ENEMIES, type GameState } from './data';
 import { getObjective, visibleMapObjects, has } from './game';
-import { isMedium } from './medium';
 import type { World, Obstacle } from './world';
 import { areaArt } from './art';
 const cache = new WeakMap<World, Map<string,string>>();
@@ -14,7 +13,7 @@ export function mapPoints(state: GameState) {
 }
 export function mapView(state: GameState, world: World) {
   let zones = cache.get(world); if (!zones) { zones=new Map(); cache.set(world,zones); }
-  const layout = `${state.zone}:${isMedium(state)}`;
+  const layout = state.zone;
   let base=zones.get(layout);
   if (!base) {
     const rect=(r:Obstacle,color:string)=>`<rect x="${r.x-r.w/2}" y="${r.z-r.d/2}" width="${r.w}" height="${r.d}" fill="${color}"/>`;

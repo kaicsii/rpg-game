@@ -2,13 +2,16 @@ import './style.css';
 import './hud.css';
 import { mapView, mapPoints, mapSymbol } from './map';
 import { World } from './world';
-import { loadHeroAtlases, NPC_ART, pixelTexture } from './sprites';
+import { loadHeroAtlases, pixelTexture } from './sprites';
+import { enemyAttackTiming } from './enemy-motion';
+import { dialogueArtKey, ECLIPSE_FORM, enemyArtKey, TRAVELER_ART } from './character-art';
 import { AudioDirector } from './audio';
-import { ALL_ZONES as ZONES, ZONE_ORDER, SKILLS, ITEMS, ENEMIES, ELEMENT_NAMES, LORE, OPENING, LOREN_MEMORY, ENDING, BRIDGE_CLUES, GUARDIAN_INTRO, type GameState, type Hero, type HeroId, type ItemId, type Interactable, type Encounter, type ZoneId } from './data';
-import { newGame, has, grantFlag, bridgeClueFlag, completeBridgeQuest, refreshStats, healParty, partyLevel, areaObjects, objective, getObjective, discoverNearby, shouldStopAutoAttack, enemyIntent, enemyThreat, revealedWeaknesses, combatStatuses, canLeave, puzzleSolved, travel, closestObject, explorationMarkers, applyItem, saveGame, loadGame, startBattle, currentActor, resolveAction, advanceEnemies, finishBattle, type Battle, type Action, type BattleEvent } from './game';
+import { ALL_ZONES as ZONES, SKILLS, ITEMS, ENEMIES, ELEMENT_NAMES, LORE, BRIDGE_CLUES, type GameState, type Hero, type HeroId, type ItemId, type Interactable, type Encounter, type ZoneId } from './data';
+import { newGame, has, grantFlag, bridgeClueFlag, completeBridgeQuest, refreshStats, healParty, partyLevel, areaObjects, objective, getObjective, discoverNearby, shouldStopAutoAttack, enemyIntent, enemyThreat, revealedWeaknesses, combatStatuses, closestObject, explorationMarkers, applyItem, saveGame, loadGame, startBattle, currentActor, resolveAction, advanceEnemies, finishBattle, earnsVictoryRewards, type Battle, type Action, type BattleEvent } from './game';
 import { EPILOGUE_ZONES, MEDIUM_CHAPTERS, MEDIUM_NOTES, MEDIUM_QUESTS, MEDIUM_TALKS, MEDIUM_TEXT, type StoryStep } from './medium-content';
-import { epilogueLines, finishMediumAction, finishQuestStop, isMedium, mediumChapter, mediumDestination, mediumLines, mediumProgress, mediumSteps, nextQuestStop, unlockedRegions } from './medium';
-import { boardSaved, boardValues, checkPuzzleBoard, choosePuzzleValue, FIELD_CLUES, nextForestBeacon, northGateOpen, PUZZLE_BOARDS, skyAligned, turnValve, VALVES, valveLevel, waterDrained, type PuzzleBoard } from './puzzles';
+import { epilogueLines, finishMediumAction, finishQuestStop, finishMediumStep, mediumChapter, mediumDestination, mediumLines, mediumProgress, mediumSteps, nextQuestStop, unlockedRegions } from './medium';
+import { boardSaved, boardValues, checkPuzzleBoard, choosePuzzleValue, FIELD_CLUES, nextForestBeacon, PUZZLE_BOARDS, skyAligned, turnValve, VALVES, valveLevel, waterDrained, type PuzzleBoard } from './puzzles';
+import { storyShot, type StoryTone } from './story-direction';
 
 type Mode = 'title' | 'explore' | 'dialogue' | 'battle' | 'pause' | 'puzzle' | 'ending';
 type Tab = 'journal' | 'party' | 'items' | 'settings' | 'saves' | 'help' | 'shop' | 'map';
@@ -30,7 +33,9 @@ let state = newGame(); let mode: Mode = 'title'; let previousMode: Mode = 'explo
 let battleStart: GameState | null = null; let battleMenu: 'main' | 'skills' | 'items' | 'target' = 'main'; let pendingAction: Action | null = null;
 let autoAttack = false; let nextAutoAttack = 0;
 type DialogueChoices = { labels: string[]; replies: string[][] };
-let busy = false; let dialogue: { lines: string[][]; index: number; done?: () => void; atBridge: boolean; choices?: DialogueChoices } | null = null;
+type Direction = { scene?: string; artScene?: string; target?: { x: number; z: number; id?: string }; offset?: number; reaction?: boolean };
+let busy = false; let dialogue: { lines: string[][]; index: number; done?: () => void; atBridge: boolean; choices?: DialogueChoices; direction?: Direction; tone?: StoryTone } | null = null;
+let pendingInteraction: (() => void) | undefined;
 let nearby = ''; let toastTimer: ReturnType<typeof setTimeout>; let encounterCooldown = 0; let areaTimer: ReturnType<typeof setTimeout>;
 let mapTick = 0;
 let lastTick = performance.now(); let timeAccumulator = 0; const keys = new Set<string>();
@@ -78,6 +83,11 @@ function autoSave() { store('auto', true); }
 function settingsSync() { audio.setVolume(state.settings.volume); world.sync(state); }
 function setMode(next: Mode) {
   if (next !== 'battle') autoAttack = false;
+  if (next === 'explore' || next === 'battle' || next === 'title' || next === 'ending') {
+    pendingInteraction = undefined;
+    game.removeAttribute('aria-busy');
+    world.endInteraction();
+  }
   mode = next; keys.clear();
   const inForest = state.zone === 'forest' && next !== 'title' && !(next === 'pause' && previousMode === 'title');
   audio.setScore(dialogue?.atBridge || battle?.encounter.id === 'forest-elite' ? 'guardian' : inForest ? 'forest' : 'journey', next === 'battle');
@@ -86,38 +96,64 @@ function setMode(next: Mode) {
 function showArea() {
   const el = document.querySelector('#area-announcement'); if (!el) return; el.classList.add('visible'); clearTimeout(areaTimer); areaTimer = setTimeout(() => el.classList.remove('visible'), state.settings.reducedMotion ? 2000 : 3600);
 }
-function startNew(medium = false) {
+function startNew() {
   const settings = { ...state.settings }; state = newGame(); state.settings = settings; previousMode = 'explore'; battle = null; audio.start(); audio.setVolume(state.settings.volume); world.build(state);
-  if (medium) { state.flags.push('medium-campaign'); playMediumStep(mediumSteps(state)[0]); }
-  else talk(OPENING, () => { state = grantFlag(state, 'intro'); autoSave(); showArea(); });
+  playMediumStep(mediumSteps(state)[0]);
 }
 function continueGame(slot: 'auto' | 'manual') {
   const result = loadGame(storage, slot); if (!result.state) { toast(result.error!); return; }
-  state = result.state; battle = null; world.build(state); settingsSync(); audio.start(); encounterCooldown = 3;
-  setMode(isMedium(state) && has(state, 'C8-06') && !has(state, 'E06') ? 'ending' : 'explore');
+  state = result.state; previousMode = 'explore'; battle = null; world.build(state); settingsSync(); audio.start(); encounterCooldown = 3;
+  if (!has(state, 'P00') && state.zone === 'village') { playMediumStep(mediumSteps(state)[0]); return; }
+  setMode(has(state, 'C8-06') && !has(state, 'E06') ? 'ending' : 'explore');
   showArea(); toast('歡迎回來，守燈人。');
 }
-function talk(lines: string[][], done?: () => void, atBridge = false, choices?: DialogueChoices) {
-  dialogue = { lines, index: 0, done, atBridge, choices }; setMode('dialogue');
+function returnToTitle() {
+  autoSave();
+  const settings = state.settings;
+  state = newGame(); state.settings = settings;
+  world.build(state);
+  setMode('title');
+}
+function directDialogue() {
+  const direction = dialogue?.direction;
+  if (!dialogue || !direction?.scene && !direction?.target) {
+    world.stageStory(); audio.stageStory(false); return;
+  }
+  const id = direction.scene ?? '';
+  const [speaker] = dialogue.lines[dialogue.index];
+  const target = id === 'P00' ? { x: -3, z: 0 } : id === 'C8-06' ? { x: 0, z: -7 } : direction.target;
+  const shot = storyShot(id, direction.reaction ? -1 : dialogue.index + (direction.offset ?? 0), dialogueArtKey(speaker, id), target, target?.id);
+  dialogue.tone = shot.tone;
+  world.stageStory(shot); audio.stageStory(true, shot.sound);
+}
+function talk(lines: string[][], done?: () => void, atBridge = false, choices?: DialogueChoices, direction?: Direction) {
+  dialogue = { lines, index: 0, done, atBridge, choices, direction };
+  directDialogue(); setMode('dialogue');
 }
 function nextLine(skip = false, choice = 0) {
   if (!dialogue) return;
-  if (!skip && dialogue.index < dialogue.lines.length - 1) { dialogue.index++; audio.effect('confirm'); render(); }
+  if (!skip && dialogue.index < dialogue.lines.length - 1) {
+    dialogue.index++;
+    if (dialogue.direction?.scene || dialogue.direction?.target) directDialogue(); else audio.effect('confirm');
+    render();
+  }
   else if (!skip && dialogue.choices) {
     const reply = dialogue.choices.replies[choice];
-    if (reply) talk([reply], dialogue.done);
+    if (reply) talk([reply], dialogue.done, false, undefined, { ...dialogue.direction, reaction: true });
   }
   else {
     const { done, atBridge } = dialogue; dialogue = null;
+    directDialogue();
     if (atBridge || mode === 'battle') { done?.(); return; }
     setMode('explore'); done?.(); render();
   }
 }
-function openMenu(next: Tab) { if (mode !== 'explore' && mode !== 'title') return; previousMode = mode === 'title' ? 'title' : 'explore'; tab = next; setMode('pause'); }
-function closeMenu() { setMode(previousMode); }
-function changeZone(direction: 1 | -1) {
-  state = travel(state, direction); world.build(state); encounterCooldown = 3; autoSave(); setMode('explore'); showArea();
+function openMenu(next: Tab) {
+  if (pendingInteraction || mode !== 'explore' && mode !== 'title') return;
+  if (next !== 'shop') world.endInteraction();
+  previousMode = mode === 'title' ? 'title' : 'explore'; tab = next; setMode('pause');
 }
+function closeMenu() { setMode(previousMode); }
 function goToRegion(zone: ZoneId) {
   if (zone !== state.zone) {
     state.zone = zone; state.position = { x: 0, z: 8.5 };
@@ -152,9 +188,10 @@ function playMediumStep(step: StoryStep, object?: Interactable, steps = [step]) 
       audio.effect('light');
     }
     for (const part of steps) finishMediumAction(state, part);
-    if (step.scene === 'C8-01') state.xp += 24;
+    if (step.scene === 'C8-01' && !has(state, 'star-aligned')) { state.flags.push('star-aligned'); state.xp += 24; }
     if (object?.kind === 'lamp') restAt(object);
     if (step.scene === 'C8-06') healParty(state);
+    if (step.scene === 'P00') toast('用 WASD／方向鍵或觸控方向鍵移動，靠近婆婆後按 E 或點擊互動。');
     updateStory();
     if (step.scene === 'C8-06') { audio.effect('win'); setMode('ending'); }
     else if (step.scene === 'P00') showArea();
@@ -163,7 +200,7 @@ function playMediumStep(step: StoryStep, object?: Interactable, steps = [step]) 
     }
   };
   const lines = step.scene === 'C2-02' ? steps.flatMap(part => mediumLines(state, part)) : mediumLines(state, step);
-  talk(lines, complete, false, corridorChoices[step.scene]);
+  talk(lines, complete, false, corridorChoices[step.scene], { scene: step.scene, target: object });
 }
 let activePuzzle: { board: PuzzleBoard; point: Interactable; feedback: string } | null = null;
 function openPuzzle(board: PuzzleBoard, point: Interactable) {
@@ -185,7 +222,7 @@ function puzzleAction(action: string, a: string, b: string, control: HTMLButtonE
       audio.effect('light');
       closePuzzle();
       interact(point);
-      toast(board.success);
+      if (!dialogue?.direction) toast(board.success);
       return;
     }
     activePuzzle.feedback = feedback;
@@ -205,9 +242,8 @@ function puzzleAction(action: string, a: string, b: string, control: HTMLButtonE
 function useFieldMechanism(object: Interactable) {
   const id = object.id;
   const scene = id.startsWith('beacon') ? 'C1-02' : id.startsWith('valve') ? 'C2-02' : 'C8-01';
-  const medium = isMedium(state);
-  const steps = medium ? mediumSteps(state).filter(step => step.scene === scene) : [];
-  if (medium && !steps.length) {
+  const steps = mediumSteps(state).filter(step => step.scene === scene);
+  if (!steps.length) {
     toast(has(state, scene) ? '機關已固定。' : objective(state)); return;
   }
   if (scene === 'C1-02') {
@@ -220,9 +256,8 @@ function useFieldMechanism(object: Interactable) {
     if (nextForestBeacon(state) !== id) {
       toast('燈芯沒有接到根紋的暖意。再讀營地旁的根紋碑。'); return;
     }
-    if (current) { playMediumStep(current, object); return; }
-    state.mechanisms[id] = 1; state.xp += 4;
-    toast(nextForestBeacon(state) ? '暖意沿根紋流向下一盞燈。' : '三盞林燈亮起，古橋傳來樹木甦醒的聲音。');
+    if (current) playMediumStep(current, object);
+    return;
   } else if (scene === 'C2-02') {
     turnValve(state, id);
     const balanced = waterDrained(state);
@@ -238,21 +273,21 @@ function useFieldMechanism(object: Interactable) {
     if (aligned && steps.length) {
       world.sync(state); autoSave(); playMediumStep(steps[0], object, steps); return;
     }
-    if (aligned && !has(state, 'star-aligned')) state = grantFlag(state, 'star-aligned', s => { s.xp += 24; });
   }
   audio.effect('light'); refreshStats(state); world.sync(state); autoSave(); render();
 }
-function interactMedium(object: Interactable): boolean {
+function interactStory(object: Interactable): boolean {
   const step = mediumSteps(state).find(step => !step.battle && step.target === object.id);
   if (step) {
     const board = PUZZLE_BOARDS.find(board => board.scene === step.scene);
-    if (board && !boardSaved(state, board)) openPuzzle(board, object);
+    if (board && !boardSaved(state, board)) afterInteractionReveal(() => openPuzzle(board, object));
     else playMediumStep(step, object);
     return true;
   }
   if (object.kind === 'exit' || object.kind === 'back') {
     const destination = mediumDestination(state, object.id);
-    if (destination) goToRegion(destination); else toast(objective(state));
+    if (destination) afterInteractionReveal(() => goToRegion(destination));
+    else toast(objective(state));
     return true;
   }
   if (object.id === 'loren-memory') { toast(objective(state)); return true; }
@@ -264,7 +299,7 @@ function interactMedium(object: Interactable): boolean {
       const complete = finishQuestStop(state, quest, object.id);
       updateStory();
       toast(complete ? `支線完成 · ${MEDIUM_TEXT[quest.id].title}` : '支線已更新 · 查看旅途日誌');
-    });
+    }, false, undefined, { artScene: stop.point.id });
     return true;
   }
   if (object.id.startsWith('H')) {
@@ -276,34 +311,49 @@ function interactMedium(object: Interactable): boolean {
   } else toast(objective(state));
   return true;
 }
+function afterInteractionReveal(action: () => void) {
+  if (!world.interactionRevealPending) { action(); return; }
+  keys.clear();
+  pendingInteraction = action;
+  game.setAttribute('aria-busy', 'true');
+}
 function interact(object = closestObject(state)) {
-  if (mode !== 'explore' || !object) return; audio.start(); audio.effect('confirm'); const id = object.id;
+  if (mode !== 'explore' || !object || pendingInteraction) return;
+  audio.start(); audio.effect('confirm');
+  world.focusInteraction(state.position, object);
+  if (world.interactionRevealPending) toastEl.classList.remove('visible');
+  if (object.kind === 'chest' || object.kind === 'herb' || object.kind === 'memory' && object.id !== 'loren-memory') {
+    afterInteractionReveal(() => useObject(object));
+  } else useObject(object);
+}
+function useObject(object: Interactable) {
+  const id = object.id;
   const clue = FIELD_CLUES[state.zone];
   if (id === clue?.point.id) {
     talk([...clue.clues.map(text => [clue.point.label, text]), ['提示', clue.hint]]);
     return;
   }
   if (object.kind === 'mechanism') { useFieldMechanism(object); return; }
-  if (isMedium(state) && interactMedium(object)) return;
+  if (interactStory(object)) return;
   if (id === 'bridge-lantern') {
     const hero = state.leaderId; const flag = bridgeClueFlag(hero);
     if (has(state, flag)) { toast('這條線索已收錄。換另一位旅人帶隊，可再看看這盞燈。'); return; }
     talk(BRIDGE_CLUES[hero].lines, () => { state = grantFlag(state, flag); autoSave(); toast('線索已收錄 · 橋上未響的鈴'); });
     return;
   }
-  if (object.kind === 'lore') { talk((LORE[id] ?? MEDIUM_TEXT[id]).lines, () => { state = grantFlag(state, id); autoSave(); toast('記憶已收錄至旅途日誌。'); }); return; }
-  if (object.kind === 'back') { changeZone(-1); return; }
-  if (object.kind === 'exit') {
-    if (id === 'forest-exit' && has(state, 'main-quest') && !northGateOpen(state)) {
-      openPuzzle(PUZZLE_BOARDS[0], object); return;
-    }
-    const blocked = canLeave(state); if (blocked) { toast(blocked); return; }
-    if (state.zone === 'tower') { showEnding(); return; }
-    const lines = state.zone === 'village' ? [['莉恩', '北方的森林裡，還有三盞等著我們的燈。走吧，洛恩。'], ['洛恩', '你的燈很小。卻讓這條路看起來，不那麼黑了。']] : state.zone === 'forest' ? [['莉恩', '第一縷星火……它像在輕輕呼吸。'], ['洛恩', '橋下的水，流向鐘塔。那裡或許藏著我忘記的名字。']] : [['洛恩', '星火和記憶都找回來了。這次，我會親手打開那扇門。'], ['莉恩', '我們一起。還有整座村子的願望。']];
-    talk(lines, () => changeZone(1)); return;
+  if (object.kind === 'lore') {
+    talk((LORE[id] ?? MEDIUM_TEXT[id]).lines, () => {
+      state = grantFlag(state, id);
+      if (object.takeOnRead) world.sync(state);
+      autoSave(); toast(object.takeOnRead ? '已拾取，內容已收錄至旅途日誌。' : '記憶已收錄至旅途日誌。');
+    });
+    return;
   }
   if (object.kind === 'lamp') {
-    restAt(object, true); autoSave(); toast('在星燈旁稍作歇息。生命與魔力已恢復，進度已保存。'); render(); return;
+    afterInteractionReveal(() => {
+      restAt(object, true); autoSave(); toast('在星燈旁稍作歇息。生命與魔力已恢復，進度已保存。'); render();
+    });
+    return;
   }
   if (object.kind === 'chest') {
     if (has(state, id)) { toast('箱子已經空了，旅途還有許多驚喜。'); return; }
@@ -315,15 +365,12 @@ function interact(object = closestObject(state)) {
   }
   if (object.kind === 'memory') {
     if (has(state, id)) { toast('這段記憶，已好好收藏在心裡。'); return; }
-    state = grantFlag(state, id, s => { if (id === 'loren-memory') s.xp += 20; }); refreshStats(state); world.sync(state); autoSave(); audio.effect('light');
-    if (id === 'loren-memory') talk(LOREN_MEMORY);
-    else talk([['莉恩', '一枚刻著小風鈴的墜飾……米菈說過，那是她母親留下的東西。'], ['洛恩', '替她帶回去吧。有些失去，是可以找回來的。']]); return;
+    state = grantFlag(state, id); world.sync(state); autoSave(); audio.effect('light');
+    talk([['莉恩', '一枚刻著小風鈴的墜飾……米菈說過，那是她母親留下的東西。'], ['洛恩', '替她帶回去吧。有些失去，是可以找回來的。']]); return;
   }
-  if (id === 'merchant') { openMenu('shop'); return; }
+  if (id === 'merchant') { afterInteractionReveal(() => openMenu('shop')); return; }
   if (id === 'elder') {
-    if (!has(state, 'main-quest')) {
-      talk([['守燈婆婆', '莉恩，星燈不是靠一個人的力量點亮的。森林的燈、水道的記憶、鐘塔的星盤……它們曾是大家共同的約定。'], ['守燈婆婆', '先去點亮森林的三盞路燈吧。遇上迷途的生靈，找出它們的弱點。命中弱點就能削減護盾；護盾見底時，敵人會失去下一次行動。'], ['守燈婆婆', '這些補給帶著。累了就回到藍色星燈旁，村子會一直等你。'], ['莉恩', '我們一定會把黎明帶回來！']], () => { state = grantFlag(state, 'main-quest', s => { s.xp += 10; s.inventory.potion += 2; }); refreshStats(state); autoSave(); toast('主線已開啟：尋回散落的星火'); });
-    } else if (!has(state, 'bridge-reward') && (has(state, bridgeClueFlag('lien')) || has(state, bridgeClueFlag('loren')))) {
+    if (!has(state, 'bridge-reward') && (has(state, bridgeClueFlag('lien')) || has(state, bridgeClueFlag('loren')))) {
       talk([['守燈婆婆', '那串鈴啊……最後一個過橋的人會搖兩短一長，告訴守橋人：你也可以回家了。後來，再也沒有人替他搖那串鈴。'],
         ['洛恩', '難怪它一直守著。這一次，我們會告訴它，路上已經沒有人落下。'],
         ['守燈婆婆', '帶上這些補給。無論你們用什麼辦法過橋，記得替我向它道聲謝。']],
@@ -345,21 +392,14 @@ function interact(object = closestObject(state)) {
 }
 function beginBattle(encounter: Encounter) {
   if (mode !== 'explore') return;
-  if (isMedium(state) && (encounter.required || encounter.id === 'f1')) {
+  if (encounter.required || encounter.id === 'f1' && !has(state, 'C1-01')) {
     const step = mediumSteps(state).find(step => step.battle && step.target === encounter.id);
     if (!step) { toast(objective(state)); encounterCooldown = 3; return; }
     const lines = mediumLines(state, step);
     const split = battleLineSplit[step.scene] ?? lines.length;
-    talk(lines.slice(0, split), () => enterBattle({ ...encounter, required: true }), encounter.id === 'forest-elite');
-    return;
-  }
-  if (encounter.required && !puzzleSolved(state)) { toast('先完成這個區域的機關，再挑戰守衛吧。'); encounterCooldown = 3; return; }
-  if (encounter.id === 'forest-elite' && !has(state, 'bridge-guardian-seen')) {
-    toastEl.classList.remove('visible');
-    talk(GUARDIAN_INTRO, () => {
-      state = grantFlag(state, 'bridge-guardian-seen'); autoSave(); enterBattle(encounter);
-    }, true);
-    audio.effect('bell');
+    const atBridge = step.scene === 'C1-05';
+    if (atBridge) audio.effect('bell');
+    talk(lines.slice(0, split), () => enterBattle({ ...encounter, required: true }), atBridge, undefined, { scene: step.scene, target: encounter });
     return;
   }
   enterBattle(encounter);
@@ -371,7 +411,7 @@ function enterBattle(encounter: Encounter) {
 async function enemyTurns() {
   if (!battle) return;
   try {
-    const result = advanceEnemies(battle); await feedback(result.events);
+    const result = advanceEnemies(battle); await feedback(result.events, result.battle);
     battle = result.battle; world.syncBattle(battle);
     if (battle.status === 'victory') audio.effect('win');
   } finally { busy = false; nextAutoAttack = performance.now() + 350; if (battle?.status !== 'active') autoAttack = false; render(); }
@@ -382,7 +422,7 @@ async function battleAction(action: Action) {
   const commandHadFocus = ui.querySelector('.battle-commands')?.contains(document.activeElement);
   battleMenu = 'main'; pendingAction = null; busy = true; render();
   try {
-    await feedback(result.events); battle = result.battle; world.syncBattle(battle); render();
+    await feedback(result.events, result.battle); battle = result.battle; world.syncBattle(battle); render();
     await enemyTurns();
   } finally {
     busy = false; nextAutoAttack = performance.now() + 350;
@@ -391,30 +431,45 @@ async function battleAction(action: Action) {
     if (commandHadFocus && document.activeElement === document.body) focusBattleCommand();
   }
 }
-async function feedback(events: BattleEvent[]) {
+async function feedback(events: BattleEvent[], nextBattle: Battle) {
   const pause = (ms: number) => new Promise<void>(done => setTimeout(done, ms));
-  for (const event of events) {
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
     if (event.target && (event.type === 'damage' || event.type === 'heal')) {
       const effect = event.effect ?? (event.type === 'heal' ? 'heal' : 'slash');
-      world.attackEffect(event.source, event.target, effect); audio.combat(effect, 'cast');
-      await pause(state.settings.reducedMotion ? 0 : 220);
-      world.hitEffect(event.target, effect); audio.combat(effect);
-      if (event.amount !== undefined) world.numberEffect(event.target, event.amount, event.type === 'heal');
-      await pause(state.settings.reducedMotion ? 60 : 400);
+      const hits = new Map([[event.target, event.amount]]);
+      if (event.enemyMove === 'sweep') {
+        while (events[i + 1]?.enemyMove === 'sweep' && events[i + 1].source === event.source) {
+          const hit = events[++i];
+          if (hit.target) hits.set(hit.target, (hits.get(hit.target) ?? 0) + (hit.amount ?? 0));
+        }
+      }
+      const still = world.reducedBattleMotion;
+      world.attackEffect(event.source, event.target, effect, event.enemyMove); audio.combat(effect, 'cast');
+      await pause(still ? 0 : enemyAttackTiming.impact);
+      audio.combat(effect);
+      for (const [target, amount] of hits) {
+        world.hitEffect(target, effect, event.source);
+        if (amount !== undefined) world.numberEffect(target, amount, event.type === 'heal');
+      }
+      await pause(still ? 60 : 400);
     } else if (event.text.includes('進入第二階段')) {
-      toast(event.text); audio.effect('light');
-      if (isMedium(state)) await new Promise<void>(resolve => {
-        dialogue = { lines: MEDIUM_TEXT['C8-04'].lines, index: 0, done: resolve, atBridge: false };
-        render();
+      world.syncBattle(nextBattle);
+      await new Promise<void>(resolve => {
+        dialogue = {
+          lines: MEDIUM_TEXT['C8-04'].lines, index: 0, done: resolve, atBridge: false,
+          direction: { scene: 'C8-04', target: { id: 'enemy-0', x: 2.4, z: -0.5 } },
+        };
+        directDialogue(); render();
       });
     } else if (event.type === 'break' && event.target) {
-      audio.combat('break'); world.hitEffect(event.target, 'resonance');
+      audio.combat('break'); world.hitEffect(event.target, 'resonance', undefined, true);
       if (event.text.includes('根鬚橫掃')) toast(event.text);
     }
   }
 }
 function setLeader(id: HeroId, focusCard = false) {
-  if (mode !== 'explore' || !['lien','loren'].includes(id)) return;
+  if (mode !== 'explore' || pendingInteraction || !['lien','loren'].includes(id)) return;
   state.leaderId = id; keys.clear(); world.setLeader(state); autoSave(); render();
   if (focusCard) ui.querySelector<HTMLButtonElement>(`[data-action="leader:${id}"]`)?.focus({preventScroll:true});
 }
@@ -451,7 +506,7 @@ function endBattle() {
   state = finishBattle(state, battle);
   if (!won) state.position.z = Math.min(10, state.position.z + 2.5);
   battle = null; battleStart = null; encounterCooldown = 4;
-  if (isMedium(state) && won) {
+  if (won) {
     const step = mediumSteps(state).find(step => step.battle && step.target === id);
     if (step) {
       finishMediumAction(state, step);
@@ -459,43 +514,43 @@ function endBattle() {
       if (phaseTwo) finishMediumAction(state, phaseTwo);
       world.build(state); autoSave(); setMode('explore');
       const lines = mediumLines(state, step);
-      const after = lines.slice(battleLineSplit[step.scene] ?? lines.length);
-      if (after.length) talk(after); else toast('戰鬥勝利。旅途進度已保存。');
+      const split = battleLineSplit[step.scene] ?? lines.length;
+      const after = lines.slice(split);
+      if (id === 'forest-elite' && has(state, 'bridge-reward')) {
+        after.push(['洛恩', '兩短一長。橋上的人都到家了。守橋人，辛苦了。'],
+          ['旁白', '古橋的鈴輕響一聲，根鬚落回河畔。']);
+      }
+      const message = id === 'forest-elite' ? '獲得第一縷星火，兩人的武器已強化。' : '戰鬥勝利。旅途進度已保存。';
+      if (after.length) {
+        talk(after, () => toast(message), false, undefined, {
+          scene: step.scene, offset: split, target: ZONES[state.zone].encounters.find(encounter => encounter.id === id),
+        });
+      } else toast(message);
       return;
     }
   }
   world.build(state); setMode('explore');
-  if (!won) return;
-  autoSave();
-  if (id === 'forest-elite') {
-    const farewell = has(state, 'bridge-reward') ? [['洛恩', '兩短一長。橋上的人都到家了。守橋人，辛苦了。'], ['旁白', '這一次，古橋的鈴只響了一聲。根鬚落回河畔，像一雙終於能休息的手。']] : [];
-    talk([...farewell, ['莉恩', '樹靈不再悲傷了……它把星火交給了我們。'], ['洛恩', '劍上亮起了新的紋路。森林認可了我們。']], () => toast('獲得星火，兩人武器強化！生命與魔力略微恢復。'));
-  } else if (id === 'eclipse') talk([['洛恩', '影子終於安靜下來了。莉恩，帶上星火，去北方星台吧。'], ['莉恩', '讓我們一起，點亮最後一盞燈。']]);
-  else toast('戰鬥勝利。生命與魔力略微恢復，進度已保存。');
+  if (won) { autoSave(); toast('戰鬥勝利。生命與魔力略微恢復，進度已保存。'); }
 }
 function recoverBattle(retry: boolean) {
   if (!battleStart || !battle) return; autoAttack = false; const encounter = battle.encounter; const settings = { ...state.settings };
   if (retry) { state = structuredClone(battleStart); state.settings = settings; battle = startBattle(state, encounter); world.showBattle(battle); world.syncBattle(battle); battleMenu = 'main'; busy = true; render(); void enemyTurns(); }
   else { state = structuredClone(battleStart); state.settings = settings; state.zone = state.checkpoint.zone; state.position = { ...state.checkpoint.position }; healParty(state); battle = null; battleStart = null; world.build(state); encounterCooldown = 4; autoSave(); setMode('explore'); toast('星燈仍在等你。探索進度已保留。'); }
 }
-function showEnding() {
-  if (has(state, 'ending')) { setMode('ending'); return; }
-  talk(ENDING, () => { state = grantFlag(state, 'ending'); healParty(state); world.sync(state); autoSave(); audio.effect('win'); setMode('ending'); });
-}
 function nextEpilogue() {
   const index = EPILOGUE_ZONES.findIndex((_, index) => !has(state, `E0${index + 1}`));
   if (index < 0) { setMode('explore'); return; }
   const id = `E0${index + 1}`;
   goToRegion(EPILOGUE_ZONES[index]);
+  const target = areaObjects(state).find(object => object.id === ['elder', 'child', 'station-chief', 'highland-workshop', 'archive-host', 'elder'][index]);
   talk(epilogueLines(state, id), () => {
     state.flags.push(id); autoSave(); setMode('ending');
-  });
+  }, false, undefined, { scene: id, target });
 }
-const progress = () => has(state, 'ending') ? 100 : state.zone === 'village' ? has(state, 'main-quest') ? 8 : 0 : state.zone === 'forest' ? 15 + [1, 2, 3].filter(n => state.mechanisms[`beacon-${n}`]).length * 6 + (state.defeated.includes('forest-elite') ? 10 : 0) : state.zone === 'waterway' ? 45 + (has(state, 'loren-memory') ? 8 : 0) + (state.mechanisms['valve-1'] ? 5 : 0) + (state.mechanisms['valve-2'] ? 5 : 0) + (state.defeated.includes('water-elite') ? 8 : 0) : 75 + (puzzleSolved(state) ? 10 : 0) + (state.defeated.includes('eclipse') ? 10 : 0);
 const playTime = () => `${Math.floor(state.playSeconds / 3600).toString().padStart(2, '0')} : ${Math.floor(state.playSeconds / 60 % 60).toString().padStart(2, '0')}`;
 function hud() {
   const z = ZONES[state.zone];
-  const chapterTitle = isMedium(state) ? mediumChapter(state)?.title ?? '返鄉尾聲' : z.chapter;
+  const chapterTitle = mediumChapter(state)?.title ?? (has(state, 'E06') ? '黎明之後' : '返鄉尾聲');
   const dawn = has(state, 'ending');
   return `<header class="hud-top">
     <div class="hud-context">
@@ -538,28 +593,22 @@ function titleScreen() {
     <p class="title-description">有些光，來自遙遠的星辰。<br>有些光，來自我們不曾遺忘的彼此。</p>
     <div class="title-actions">
       ${button(`${icon('lantern')}<span>啟程<span class="button-en">BEGIN YOUR JOURNEY</span></span>${icon('arrow')}`, 'new', 'primary-button')}
-      ${button(`開始中篇 ${icon('arrow')}`, 'new:medium', 'continue-button medium-entry')}
       ${button(`繼續旅程 ${icon('arrow')}`, 'menu:saves', 'continue-button', !available)}
     </div>
   </main>
   <div class="scene-caption"><span class="eyebrow">序章</span><h2>${ZONES.village.name}</h2><small>${ZONES.village.subtitle}</small></div>
   <footer class="title-footer"><span>© 2026 STARLIGHT CHRONICLE</span><button data-action="menu:help">操作指南 ${icon('arrow')}</button></footer>`;
 }
-const speakerArt = new Map([
-  ['莉恩', 'lien'], ['洛恩', 'loren'], ['守燈婆婆', 'elder'], ['米菈', 'child'], ['行腳商人', 'merchant'],
-  ['候車母親', 'station-mother'], ['桑榆', 'station-chief'], ['桑榆的回傳', 'station-chief'],
-  ['伊朵', 'highland-workshop'], ['亞岑', 'highland-injured'], ['芙蕾', 'archive-host'],
-  ['寄存者甲', 'archive-reader-1'], ['寄存者乙', 'archive-reader-2'], ['寄存者丙', 'archive-reader-3'],
-  ['鄰居', 'village-neighbor'],
-]);
 function dialoguePanel() {
   if (!dialogue) return ''; const [speaker, text] = dialogue.lines[dialogue.index];
-  const kind = speakerArt.get(speaker);
+  const kind = dialogueArtKey(speaker, dialogue.direction?.artScene ?? dialogue.direction?.scene);
   const end = dialogue.index === dialogue.lines.length - 1;
   const next = end && dialogue.choices
     ? dialogue.choices.labels.map((label, index) => button(esc(label), `dialogue:choice:${index}`, 'dialogue-next')).join('')
     : button(`${end ? '繼續旅程' : '繼續'} <kbd>E</kbd> ${icon('arrow')}`, 'dialogue:next', 'dialogue-next');
-  return `<div class="dialogue-scrim"></div><section class="dialogue-panel" role="dialog" aria-label="${esc(speaker)}的對話" aria-modal="true"><div class="dialogue-art">${kind ? portrait(kind) : icon('star')}</div><div class="dialogue-body"><div class="dialogue-heading"><h2>${esc(speaker)}</h2><span>${dialogue.index + 1} / ${dialogue.lines.length}</span></div><p tabindex="0" aria-label="對話內容">${esc(text)}</p><div class="dialogue-footer">${button('略過對話 <kbd>Esc</kbd>', 'dialogue:skip', 'text-button')}${next}</div></div></section>`;
+  const scene = dialogue.direction?.scene;
+  const caption = !dialogue.atBridge && scene && MEDIUM_TEXT[scene]?.title;
+  return `<div class="dialogue-scrim"></div><section class="dialogue-panel" role="dialog" aria-label="${esc(speaker)}的對話" aria-modal="true"><div class="dialogue-art">${kind ? portrait(kind) : icon('star')}</div><div class="dialogue-body"><div class="dialogue-heading"><h2>${esc(speaker)}</h2><span>${dialogue.index + 1} / ${dialogue.lines.length}</span></div><p tabindex="0" aria-label="對話內容">${esc(text)}</p><div class="dialogue-footer">${button('略過對話 <kbd>Esc</kbd>', 'dialogue:skip', 'text-button')}${next}</div></div></section>${caption ? `<div class="story-caption" aria-hidden="true"><span>${esc(ZONES[state.zone].name)}</span><strong>${esc(caption)}</strong></div>` : ''}`;
 }
 function bridgeIntro() {
   return `<div class="bridge-title"><span class="eyebrow">螢光森林 · 古橋</span><strong>古橋守木</strong><span>✧</span></div>`;
@@ -570,19 +619,16 @@ function modalPanel() {
   return `<div class="modal-scrim"></div><section class="menu-panel" role="dialog" aria-modal="true" aria-label="${title}"><aside class="menu-sidebar"><div class="menu-brand">${icon('star')}<span>星燈紀行</span></div>${tabs.map(([key, label, symbol]) => button(`${icon(symbol)} ${label}`, `tab:${key}`, tab === key ? 'tab active' : 'tab', previousMode === 'title' && ['map', 'journal', 'party', 'items'].includes(key))).join('')}<div class="sidebar-bottom">${icon('moon')}<span>願微光，指引歸途</span></div></aside><div class="menu-main"><header class="menu-heading"><div><h2>${title}</h2></div>${button(icon('close'), 'close', 'close-button')}</header><div class="menu-scroll">${menuContent()}</div><footer class="menu-footer"><span>${icon('star')} ${state.gold} 星幣</span><span>旅途時間 ${playTime()}</span><span><kbd>Esc</kbd> 返回</span></footer></div></section>`;
 }
 function menuContent(): string {
-  if (tab === 'map') return `<p class="menu-intro">${objective(state)}</p><div data-map-view class="large-map">${mapView(state,world)}</div><div class="map-legend">● 玩家　<span>★ 主線</span>　<span class="map-npc">◆ 村民</span>　<span class="map-shop">■ 商店</span>　<span class="map-lamp">● 星燈</span><br>北方朝上；道路與障礙完整顯示。收藏物接近四個單位後揭露。</div>${isMedium(state) ? travelMenu() : ''}<ul class="map-points">${mapPoints(state).map(o=>`<li>${mapSymbol(o.kind, o.id, getObjective(state).targetIds.includes(o.id))} ${esc(o.label)}${has(state,o.id)?'（已讀）':''}</li>`).join('')}</ul>`;
+  if (tab === 'map') return `<p class="menu-intro">${objective(state)}</p><div data-map-view class="large-map">${mapView(state,world)}</div><div class="map-legend">● 玩家　<span>★ 主線</span>　<span class="map-npc">◆ 村民</span>　<span class="map-shop">■ 商店</span>　<span class="map-lamp">● 星燈</span><br>北方朝上；道路與障礙完整顯示。收藏物接近四個單位後揭露。</div>${travelMenu()}<ul class="map-points">${mapPoints(state).map(o=>`<li>${mapSymbol(o.kind, o.id, getObjective(state).targetIds.includes(o.id))} ${esc(o.label)}${has(state,o.id)?'（已讀）':''}</li>`).join('')}</ul>`;
 
-  if (tab === 'journal' && isMedium(state)) return mediumJournal();
-  if (tab === 'journal') {
-    return `<div class="chapter-card"><span class="eyebrow">主線 · ${progress()}% COMPLETE</span><h3>尋回散落的星火</h3><p>${objective(state)}</p><div class="progress-track"><i style="width:${progress()}%"></i></div></div><h3 class="section-label">旅途的足跡</h3><div class="chapter-list">${ZONE_ORDER.map((id, i) => `<div class="chapter-row ${id === state.zone ? 'current' : ''}"><span class="chapter-number">0${i + 1}</span><div><h4>${ZONES[id].name}</h4><p>${i === 0 ? '與婆婆交談，在北門解開鐘譜。' : i === 1 ? '讀營地根紋碑，按序喚醒林燈，再挑戰守橋樹靈。' : i === 2 ? '依入口分流尺穩定兩道水閘，拾回西北方的記憶。' : '讀觀星碑，調整三面星盤讓光束交會。'}</p></div><span>${id === state.zone ? '旅途之中' : (ZONE_ORDER as readonly ZoneId[]).indexOf(state.zone) > i || has(state, 'ending') ? '已抵達' : '等待探訪'}</span></div>`).join('')}</div><h3 class="section-label">拾回的記憶 · ${Object.keys(LORE).filter(id => has(state, id)).length} / 8</h3><div class="lore-notes">${Object.entries(LORE).filter(([id]) => has(state, id)).map(([, note]) => `<details><summary>${note.title}</summary>${note.lines.map(([speaker, text]) => `<p><b>${speaker}</b>${text}</p>`).join('')}</details>`).join('') || '<p class="footnote">沿途的碑文、信紙與舊物，藏著山城曾經的故事。</p>'}</div><h3 class="section-label">沿途的約定</h3>${bridgeJournal()}<div class="sidequest"><h4>${has(state, 'herb-reward') ? '✓' : '◇'} 一捧月露</h4><p>在森林採集三株月露草，帶回霧鐘村給守燈婆婆。${[1, 2, 3].filter(n => has(state, `herb-${n}`)).length} / 3</p><small>獎勵：月露護符（生命 +25）、月露藥 ×3</small></div><div class="sidequest"><h4>${has(state, 'pendant-reward') ? '✓' : '◇'} 水底的風鈴</h4><p>在沉星水道東南方尋找銀色墜飾，交給村裡的米菈。</p><small>獎勵：記憶石（魔力 +10）、星泉水 ×3、甦醒之羽 ×1</small></div>`;
-  }
+  if (tab === 'journal') return storyJournal();
   if (tab === 'party') return `<div class="party-cards">${state.party.map(h => `<article class="party-card"><div class="character-art ${h.id}">${portrait(h.id)}</div><div class="character-info"><span class="eyebrow">${h.id === 'lien' ? 'THE LANTERN KEEPER' : 'THE FORGOTTEN KNIGHT'}</span><h3>${h.name}<small>${h.id === state.leaderId ? '帶隊 · ' : ''}Lv. ${partyLevel(state)}</small></h3><p>${h.id === 'lien' ? '「只要還有人記得，燈火就不會熄滅。」' : '「這一次，我不會再獨自守燈。」'}</p><div class="stat-grid"><span>生命 <b>${h.hp} / ${h.maxHp}</b></span><span>魔力 <b>${h.mp} / ${h.maxMp}</b></span><span>攻擊 <b>${h.atk}</b></span><span>防禦 <b>${h.def}</b></span><span>速度 <b>${h.speed}</b></span><span>經驗 <b>${state.xp}</b></span></div><div class="equipment"><span>${icon('sword')} ${has(state, 'weapon-upgrade') ? '星火強化 · ' : ''}${h.id === 'lien' ? '守燈人的提燈' : '刻名的古劍'}</span><span>${icon('star')} ${h.accessory === 'moon-charm' ? '月露護符 · HP +25' : h.accessory === 'memory-charm' ? '記憶石 · MP +10' : '尚未裝備飾品'}</span></div><h4 class="section-label">旅人技能</h4>${SKILLS.filter(s => s.owner === h.id).map(s => `<div class="skill-row ${s.level > partyLevel(state) ? 'locked' : ''}"><span>${s.name}<small>${s.description}</small></span><b>${s.level > partyLevel(state) ? `Lv.${s.level} 解鎖` : `${s.cost} MP`}</b></div>`).join('')}</div></article>`).join('')}</div>`;
   if (tab === 'items' || tab === 'shop') return `<p class="menu-intro">${tab === 'shop' ? '「東西不多，但每一件都能讓旅途安心些。星燈旁休息免費，別忘了！」' : '留給漫漫長夜的一點準備。選擇道具，再選擇使用的旅人。'}</p><div class="inventory-list">${(Object.keys(ITEMS) as ItemId[]).map(id => `<article class="inventory-item"><div class="item-icon ${id}">${icon(id === 'revive' ? 'leaf' : id === 'ether' ? 'star' : 'bag')}</div><div><h3>${ITEMS[id].name}<small>持有 ${state.inventory[id]}</small></h3><p>${ITEMS[id].description}</p></div><div class="item-actions">${tab === 'shop' ? button(`購買 · ${ITEMS[id].price} 星幣`, `buy:${id}`, 'outline-button', state.gold < ITEMS[id].price) : state.party.map(h => button(`給${h.name}`, `use:${id}:${h.id}`, 'outline-button', state.inventory[id] <= 0 || (id === 'revive' ? h.hp > 0 : h.hp <= 0 || (id === 'potion' ? h.hp === h.maxHp : h.mp === h.maxMp)))).join('')}</div></article>`).join('')}</div>${tab === 'shop' ? '<p class="footnote">旅途的小提醒：守橋菁英也會留下補給。藍色星燈可以完全恢復生命與魔力。</p>' : ''}`;
   if (tab === 'saves') return `<p class="menu-intro">把此刻的星光，好好收藏。每個欄位獨立保存；自動記錄不會覆蓋手動記錄。</p>${(['auto', 'manual'] as const).map(slot => {
     const loaded = loadGame(storage, slot); const s = loaded.state;
-    return `<article class="save-slot">${icon('save')}<div><span class="eyebrow">${slot === 'auto' ? 'AUTO SAVE' : 'MANUAL SAVE'}</span><h3>${slot === 'auto' ? '沿途的星光' : '親手留下的記號'}</h3><p>${s ? `${isMedium(s) ? '中篇' : '短篇'} · ${ZONES[s.zone].name} · Lv.${partyLevel(s)} · ${Math.floor(s.playSeconds / 60)} 分鐘` : loaded.error}</p></div><div>${button('讀取記錄', `load:${slot}`, 'outline-button', !s)}${slot === 'manual' && previousMode !== 'title' ? button('寫下此刻', 'save', 'outline-button') : ''}</div></article>`;
+    return `<article class="save-slot">${icon('save')}<div><span class="eyebrow">${slot === 'auto' ? 'AUTO SAVE' : 'MANUAL SAVE'}</span><h3>${slot === 'auto' ? '沿途的星光' : '親手留下的記號'}</h3><p>${s ? `${ZONES[s.zone].name} · Lv.${partyLevel(s)} · ${Math.floor(s.playSeconds / 60)} 分鐘` : loaded.error}</p></div><div>${button('讀取記錄', `load:${slot}`, 'outline-button', !s)}${slot === 'manual' && previousMode !== 'title' ? button('寫下此刻', 'save', 'outline-button') : ''}</div></article>`;
   }).join('')}<p class="footnote">進度保存在此瀏覽器。清除網站資料將移除記錄；不同裝置不會同步。</p>`;
-  if (tab === 'settings') return `<p class="menu-intro">用適合自己的步調，走完這段旅程。</p><div class="setting-row"><div><h3>${icon('sound')} 星光的聲音</h3><p>調整音樂與音效的音量</p></div><label class="volume-control"><input aria-label="音量" type="range" id="volume" min="0" max="100" value="${Math.round(state.settings.volume * 100)}"/><output>${Math.round(state.settings.volume * 100)}%</output></label></div><div class="setting-row"><div><h3>${icon('sun')} 光影品質</h3><p>高畫質開啟陰影、泛光與螢火粒子</p></div><div class="segmented">${button('輕盈', 'quality:low', state.settings.quality === 'low' ? 'selected' : '')}${button('細緻', 'quality:high', state.settings.quality === 'high' ? 'selected' : '')}</div></div><div class="setting-row"><div><h3>${icon('leaf')} 減少動態效果</h3><p>停用角色浮動與粒子，縮短戰鬥等待</p></div><button class="toggle ${state.settings.reducedMotion ? 'on' : ''}" role="switch" aria-label="減少動態效果" aria-checked="${state.settings.reducedMotion}" data-action="motion"><i></i></button></div>${previousMode !== 'title' ? `<div class="setting-row"><div><h3>${icon('save')} 手動記錄</h3><p>將目前的旅程寫入手動存檔</p></div>${button('保存進度', 'save', 'outline-button')}</div><div class="setting-row"><div><h3>回到標題畫面</h3><p>返回前會先自動保存目前進度</p></div>${button('返回標題', 'title', 'text-button')}</div>` : ''}<div class="setting-row"><div><h3>低血量時停止自動攻擊</h3><p>任一隊員 HP ≤30%（含倒地）時停止；不自動補血。</p></div><button class="toggle ${state.settings.autoStopLowHp ? 'on' : ''}" role="switch" aria-label="低血量時停止自動攻擊" aria-checked="${state.settings.autoStopLowHp}" data-action="lowhp"><i></i></button></div><div class="settings-note">${icon('moon')} <p>所有星燈都能完全恢復隊伍。這是一段可以安心探索、隨時歇息的旅程。</p></div>`;
+  if (tab === 'settings') return `<p class="menu-intro">用適合自己的步調，走完這段旅程。</p><div class="setting-row"><div><h3>${icon('sound')} 星光的聲音</h3><p>調整音樂與音效的音量</p></div><label class="volume-control"><input aria-label="音量" type="range" id="volume" min="0" max="100" value="${Math.round(state.settings.volume * 100)}"/><output>${Math.round(state.settings.volume * 100)}%</output></label></div><div class="setting-row"><div><h3>${icon('sun')} 光影品質</h3><p>高畫質開啟陰影、泛光與螢火粒子</p></div><div class="segmented">${button('輕盈', 'quality:low', state.settings.quality === 'low' ? 'selected' : '')}${button('細緻', 'quality:high', state.settings.quality === 'high' ? 'selected' : '')}</div></div><div class="setting-row"><div><h3>${icon('leaf')} 減少動態效果</h3><p>固定劇情鏡頭與光效，停用角色浮動並縮短戰鬥等待</p></div><button class="toggle ${state.settings.reducedMotion ? 'on' : ''}" role="switch" aria-label="減少動態效果" aria-checked="${state.settings.reducedMotion}" data-action="motion"><i></i></button></div>${previousMode !== 'title' ? `<div class="setting-row"><div><h3>${icon('save')} 手動記錄</h3><p>將目前的旅程寫入手動存檔</p></div>${button('保存進度', 'save', 'outline-button')}</div><div class="setting-row"><div><h3>回到標題畫面</h3><p>返回前會先自動保存目前進度</p></div>${button('返回標題', 'title', 'text-button')}</div>` : ''}<div class="setting-row"><div><h3>低血量時停止自動攻擊</h3><p>任一隊員 HP ≤30%（含倒地）時停止；不自動補血。</p></div><button class="toggle ${state.settings.autoStopLowHp ? 'on' : ''}" role="switch" aria-label="低血量時停止自動攻擊" aria-checked="${state.settings.autoStopLowHp}" data-action="lowhp"><i></i></button></div><div class="settings-note">${icon('moon')} <p>所有星燈都能完全恢復隊伍。這是一段可以安心探索、隨時歇息的旅程。</p></div>`;
   return `<div class="help-grid"><article><span class="eyebrow">01 / EXPLORE</span><h3>循著燈火，往前走</h3><p><kbd>W A S D</kbd> 或方向鍵：依畫面方向移動<br><kbd>E</kbd> 或 <kbd>Enter</kbd>：互動、推進對話<br><kbd>Tab</kbd> 切換帶隊（未聚焦按鈕時）<br><kbd>M</kbd> 地圖　<kbd>J</kbd> 任務　<kbd>C</kbd> 隊伍　<kbd>I</kbd> 行囊<br><kbd>Esc</kbd> 略過整段對話、暫停或返回選單</p></article><article><span class="eyebrow">02 / BATTLE</span><h3>讓弱點，成為轉機</h3><p>依速度輪流行動，點擊指令與目標。按 A 或戰鬥右上角按鈕切換自動普通攻擊；按 Esc 停止。命中弱點可削減護盾，破盾會讓敵人跳過下一次行動並受到額外傷害。古橋守木的弱點需試探，蓄力可用破盾打斷。</p></article><article><span class="eyebrow">03 / RESONANCE</span><h3>兩個人的光</h3><p>每次行動都會累積共鳴。共鳴滿 100 且兩人存活時，可以施放聯手技。防禦恢復 4 MP，也能減少傷害。</p></article><article><span class="eyebrow">04 / REST</span><h3>總有一盞燈，等你回來</h3><p>藍色星燈提供免費休息與自動記錄。一般戰鬥可以逃跑；失敗能重試，或保留探索進度回到星燈。</p></article></div><p class="footnote">桌面可使用鍵盤或滑鼠操作選單；窄螢幕與觸控裝置提供方向鍵及互動按鈕，按住方向鍵移動、放開停止。</p>`;
 }
 function travelMenu() {
@@ -590,7 +636,7 @@ function travelMenu() {
     button(ZONES[zone].name, `travel:${zone}`, 'outline-button', zone === state.zone)
   ).join('')}</div>`;
 }
-function mediumJournal() {
+function storyJournal() {
   const chapter = mediumChapter(state);
   const completed = mediumProgress(state);
   const notes = { ...LORE, ...Object.fromEntries(MEDIUM_NOTES.map(([id]) => [id, MEDIUM_TEXT[id]])) };
@@ -627,7 +673,7 @@ function turnTimeline(b: Battle) {
     const current = id === currentActor(b);
     return `<li class="turn-token ${enemy ? 'enemy' : 'ally'}${current ? ' current' : ''}${threat ? ' threat' : ''}" ${current ? 'aria-current="step"' : ''}
       title="${esc(enemy ? `${unit.name} · ${enemyIntent(b, enemy)}` : unit.name)}">
-      ${portrait(enemy?.template ?? unit.id)}<span>${unit.name}</span>${threat ? '<sup aria-label="危險行動">!</sup>' : ''}
+      ${portrait(enemy ? enemyArtKey(enemy.template, enemy.phase) : unit.id)}<span>${unit.name}</span>${threat ? '<sup aria-label="危險行動">!</sup>' : ''}
     </li>`;
   }).join('') : ''}</ol></div>`;
 }
@@ -653,11 +699,14 @@ function bridgeJournal() {
 }
 function battlePanel() {
   if (!battle) return ''; const b = battle; const actor = b.heroes.find(h => h.id === currentActor(b));
-  const title = isMedium(state) && b.encounter.required && b.encounter.id !== 'eclipse' ? ENEMIES[b.encounter.enemies[0]].name : b.encounter.id === 'eclipse' ? '最後的守望' : b.encounter.id === 'forest-elite' ? '古橋守木' : b.encounter.required ? '星火的試煉' : '林間的邂逅';
+  const title = b.encounter.id === 'eclipse' ? '最後的守望' : b.encounter.required ? ENEMIES[b.encounter.enemies[0]].name : '旅途遭遇';
   let commands = '';
   if (b.status === 'victory') {
     const xp = b.encounter.enemies.reduce((sum, k) => sum + ENEMIES[k].xp, 0); const gold = b.encounter.enemies.reduce((sum, k) => sum + ENEMIES[k].gold, 0);
-    commands = `<div class="battle-result"><span class="eyebrow">VICTORY</span><h2>星光，仍與你同在。</h2><p>經驗 +${xp}　星幣 +${gold}${b.encounter.required ? '　獲得旅途補給' : ''}</p>${button(`繼續旅程 ${icon('arrow')}`, 'battle:end', 'primary-button', busy)}</div>`;
+    const rewards = earnsVictoryRewards(state, b.encounter)
+      ? `經驗 +${xp}　星幣 +${gold}${b.encounter.required ? '　獲得旅途補給' : ''}`
+      : '終戰的獎勵已在先前的旅程領取。';
+    commands = `<div class="battle-result"><span class="eyebrow">VICTORY</span><h2>星光，仍與你同在。</h2><p>${rewards}</p>${button(`繼續旅程 ${icon('arrow')}`, 'battle:end', 'primary-button', busy)}</div>`;
   } else if (b.status === 'defeat') commands = `<div class="battle-result"><span class="eyebrow">A LIGHT STILL WAITS</span><h2>這段旅程，還沒有結束。</h2><p>站起來吧。星燈會記得你走過的路。</p><div class="inline-actions">${button('重新挑戰', 'battle:retry', 'outline-button')}${button('回到最近星燈', 'battle:checkpoint', 'outline-button')}</div></div>`;
   else if (b.status === 'escaped') commands = `<div class="battle-result"><h2>暫別，並非放棄。</h2>${button('返回探索', 'battle:end', 'outline-button')}</div>`;
   else if (busy) commands = `<div class="battle-thinking">${icon('star')} 星光交錯之時……</div>`;
@@ -699,10 +748,9 @@ function battlePanel() {
   </footer></div>`;
 }
 function endingPanel() {
-  const medium = isMedium(state);
   const scenes = EPILOGUE_ZONES.filter((_, index) => has(state, `E0${index + 1}`)).length;
-  const pending = medium && scenes < EPILOGUE_ZONES.length;
-  const quests = ['herb-reward', 'pendant-reward', 'bridge-reward', ...(medium ? MEDIUM_QUESTS.map(quest => quest.id) : [])];
+  const pending = scenes < EPILOGUE_ZONES.length;
+  const quests = ['herb-reward', 'pendant-reward', 'bridge-reward', ...MEDIUM_QUESTS.map(quest => quest.id)];
   return `<div class="ending-scrim"></div><section class="ending-panel"><span class="ending-star">${icon('star')}</span><h1>${pending && scenes ? '返鄉尾聲' : '長夜盡頭，<br>是我們的黎明。'}</h1><p>${pending && scenes ? `下一站 · ${ZONES[EPILOGUE_ZONES[scenes]].name}` : '你找回了散落的星火，<br>也讓一座山城，重新記起了彼此。'}</p><div class="ending-stats"><span><b>${state.defeated.length}</b> 次並肩作戰</span><span><b>${quests.filter(f => has(state, f)).length}</b> 個完成的約定</span><span><b>${Math.floor(state.playSeconds / 60)}</b> 分鐘的旅程</span></div>${pending ? button(`${scenes ? '繼續返鄉尾聲' : '開始返鄉尾聲'} ${icon('arrow')}`, 'epilogue', 'primary-button') : button(`回到星光下 ${icon('arrow')}`, 'ending:explore', 'primary-button')}<small>${pending ? '每一站的進度都會自動保存。' : '通關進度已保存，可繼續探索與完成支線。'}</small></section>`;
 }
 function puzzlePanel() {
@@ -725,9 +773,11 @@ function puzzlePanel() {
   </section>`;
 }
 function render() {
-  ui.innerHTML = mode === 'title' ? titleScreen() : mode === 'puzzle' ? puzzlePanel() : mode === 'battle' ? (dialogue ? dialoguePanel() : battlePanel()) : `${dialogue?.atBridge ? bridgeIntro() : previousMode === 'title' && mode === 'pause' ? titleScreen() : hud()}${mode === 'dialogue' ? dialoguePanel() : mode === 'pause' ? modalPanel() : mode === 'ending' ? endingPanel() : ''}`;
+  ui.innerHTML = dialogue?.direction ? `${dialogue.atBridge ? bridgeIntro() : ''}${dialoguePanel()}` : mode === 'title' ? titleScreen() : mode === 'puzzle' ? puzzlePanel() : mode === 'battle' ? battlePanel() : `${previousMode === 'title' && mode === 'pause' ? titleScreen() : hud()}${mode === 'dialogue' ? dialoguePanel() : mode === 'pause' ? modalPanel() : mode === 'ending' ? endingPanel() : ''}`;
   ui.style.setProperty('--chapter-tint', ZONES[state.zone].color);
   game.className = `mode-${mode}${state.settings.reducedMotion ? ' reduced-motion' : ''}`;
+  if (dialogue?.direction) game.dataset.storyTone = dialogue.tone ?? 'neutral';
+  else delete game.dataset.storyTone;
   nearby = '';
   ui.querySelectorAll<HTMLButtonElement>('button').forEach(b => { if (!b.hasAttribute('aria-label') && !b.textContent?.trim()) b.setAttribute('aria-label', b.dataset.action === 'close' ? '關閉選單' : '開啟設定'); });
   if (mode === 'pause' || dialogue || mode === 'ending') requestAnimationFrame(() => (ui.querySelector('.close-button, .dialogue-next, .ending-panel button') as HTMLElement | null)?.focus({ preventScroll: true }));
@@ -745,9 +795,9 @@ ui.addEventListener('click', event => {
   else if (action === 'leader') setLeader(a as HeroId,true);
   else if (action === 'lowhp') { state.settings.autoStopLowHp = !state.settings.autoStopLowHp; if (mode !== 'battle' && previousMode !== 'title') autoSave(); render(); }
   else if (action === 'auto-attack') toggleAutoAttack();
-  else if (action === 'new') startNew(a === 'medium');
+  else if (action === 'new') startNew();
   else if (action === 'travel' && mode === 'pause' && unlockedRegions(state).includes(a as ZoneId)) goToRegion(a as ZoneId);
-  else if (action === 'epilogue' && isMedium(state) && has(state, 'C8-06')) nextEpilogue();
+  else if (action === 'epilogue' && has(state, 'C8-06')) nextEpilogue();
   else if (action === 'menu') openMenu(a as Tab);
   else if (action === 'tab') { tab = a as Tab; render(); }
   else if (action === 'close') closeMenu();
@@ -757,7 +807,7 @@ ui.addEventListener('click', event => {
   else if (action === 'load') continueGame(a as 'auto' | 'manual');
   else if (action === 'quality') { state.settings.quality = a as 'low' | 'high'; settingsSync(); if (previousMode !== 'title') autoSave(); render(); }
   else if (action === 'motion') { state.settings.reducedMotion = !state.settings.reducedMotion; settingsSync(); if (previousMode !== 'title') autoSave(); render(); }
-  else if (action === 'title') { autoSave(); world.build(state); setMode('title'); }
+  else if (action === 'title') returnToTitle();
   else if (action === 'buy') { const id = a as ItemId; if (state.gold >= ITEMS[id].price) { state.gold -= ITEMS[id].price; state.inventory[id]++; autoSave(); render(); toast(`已購買${ITEMS[id].name}`); } }
   else if (action === 'use') { const h = state.party.find(h => h.id === b)!; const id = a as ItemId; if (state.inventory[id] > 0 && applyItem(h, id)) { state.inventory[id]--; audio.effect('heal'); autoSave(); render(); } else toast('目前不需要使用這個道具。'); }
   else if (action === 'act') prepareAction({ kind: a as Action['kind'] });
@@ -829,7 +879,7 @@ function updatePrompt() {
   const obj = closestObject(state); const next = obj?.id ?? ''; world.highlight(obj?.id);
   if (next !== nearby) {
     nearby = next; const prompt = document.querySelector('#interaction');
-    if (prompt) prompt.innerHTML = obj ? button(`<kbd>E</kbd> ${obj.id === 'bridge-lantern' ? BRIDGE_CLUES[state.leaderId].action : obj.kind === 'npc' && obj.id !== 'merchant' ? `與${esc(obj.label)}交談` : esc(obj.label)} ${icon('arrow')}`, 'interact', 'interact-button') : '';
+    if (prompt) prompt.innerHTML = obj ? button(`<kbd>E</kbd> ${obj.id === 'bridge-lantern' ? BRIDGE_CLUES[state.leaderId].action : obj.kind === 'npc' && obj.id !== 'merchant' ? `與${esc(obj.label)}交談` : `${obj.takeOnRead ? '拾取' : ''}${esc(obj.label)}`} ${icon('arrow')}`, 'interact', 'interact-button') : '';
   }
   return obj;
 }
@@ -889,7 +939,7 @@ function frame(now: number) {
   if (mode === 'battle' && !document.hidden && autoAttack && !busy && battle?.status === 'active' && now >= nextAutoAttack) {
     nextAutoAttack = now + 350; if (!autoAttackBlocked()) void battleAction({ kind: 'attack' });
   }
-  if (mode === 'explore' && !document.hidden) {
+  if (mode === 'explore' && !pendingInteraction && !document.hidden) {
     encounterCooldown = Math.max(0, encounterCooldown - dt);
     const dx = Number(keys.has('d') || keys.has('arrowright')) - Number(keys.has('a') || keys.has('arrowleft'));
     const dz = Number(keys.has('s') || keys.has('arrowdown')) - Number(keys.has('w') || keys.has('arrowup'));
@@ -906,10 +956,17 @@ function frame(now: number) {
     if (encounterCooldown <= 0) { const encounter = ZONES[state.zone].encounters.find(e => !state.defeated.includes(e.id) && Math.hypot(e.x - state.position.x, e.z - state.position.z) < (e.required ? 1.55 : 0.95)); if (encounter) beginBattle(encounter); }
   }
   world.render(state, moving, mode, mx, mz, dialogue?.atBridge);
+  if (pendingInteraction && !world.interactionRevealPending) {
+    const action = pendingInteraction;
+    pendingInteraction = undefined;
+    game.removeAttribute('aria-busy');
+    keys.clear();
+    action();
+  }
   if (mode === 'explore' && !document.hidden) updateMarkers(nearest);
 }
 void loadHeroAtlases().then(() => {
-  for (const kind of ['lien', 'loren', ...Object.keys(NPC_ART), ...Object.keys(ENEMIES)]) {
+  for (const kind of ['lien', 'loren', ...Object.keys(TRAVELER_ART), ...Object.keys(ENEMIES), ECLIPSE_FORM]) {
     const texture = pixelTexture(kind, 0, 0, true);
     portraits[kind] = texture.image.toDataURL();
     texture.dispose();
@@ -920,7 +977,10 @@ void loadHeroAtlases().then(() => {
 if (import.meta.env.DEV) {
   Object.assign(window, { __starlight: {
     canWalk: (x: number, z: number) => world.canWalk(x, z),
-    view: () => ({ left: world.camera.left, right: world.camera.right, top: world.camera.top, bottom: world.camera.bottom }),
+    view: () => ({
+      left: world.camera.left, right: world.camera.right, top: world.camera.top, bottom: world.camera.bottom,
+      yaw: Math.atan2(world.camera.matrixWorld.elements[8], world.camera.matrixWorld.elements[10]),
+    }),
     screenPoint: (x: number, z: number, height: number) => {
       const projected = world.project({ x, z }, height);
       const rect = canvas.getBoundingClientRect();
@@ -929,9 +989,23 @@ if (import.meta.env.DEV) {
     pick: (x: number, y: number) => world.pick(x, y),
     getState: () => structuredClone(state), getMode: () => mode, getBattle: () => structuredClone(battle),
     fixture: (zone: ZoneId, options: { ready?: boolean; strong?: boolean } = {}) => {
-      state = newGame(); state.zone = zone; state.flags = ['intro', 'main-quest']; state.defeated = ZONE_ORDER.slice(1,(ZONE_ORDER as readonly ZoneId[]).indexOf(zone)).map(z=>z === 'forest' ? 'forest-elite' : 'water-elite');
+      state = newGame(); state.zone = zone; state.flags = ['intro', 'main-quest', 'P00', 'P01'];
+      const chapterIndex = MEDIUM_CHAPTERS.findIndex(chapter => chapter.zone === zone);
+      const before = MEDIUM_CHAPTERS.slice(0, chapterIndex).flatMap(chapter => chapter.groups.flat());
+      for (const step of before) {
+        if (has(state, step.scene)) continue;
+        finishMediumStep(state, step);
+        if (step.battle && !state.defeated.includes(step.target)) state.defeated.push(step.target);
+      }
+      if (options.ready) {
+        const chapter = MEDIUM_CHAPTERS[chapterIndex];
+        const target = ({ forest: 'C1-05', waterway: 'C2-04', tower: 'C8-03' } as Partial<Record<ZoneId, string>>)[zone];
+        const prerequisiteGroups = chapter.groups.findIndex(group => group.some(step => step.scene === target));
+        for (const step of chapter.groups.slice(0, Math.max(0, prerequisiteGroups)).flat()) finishMediumStep(state, step);
+        Object.assign(state.mechanisms, { 'beacon-1': 1, 'beacon-2': 1, 'beacon-3': 1, 'valve-1': 1, 'valve-2': 1, 'dial-1': 2, 'dial-2': 1, 'dial-3': 3 });
+        state.flags.push('loren-memory');
+      }
       if (options.strong) { state.xp = 160; refreshStats(state); healParty(state); }
-      if (options.ready) { Object.assign(state.mechanisms, { 'beacon-1': 1, 'beacon-2': 1, 'beacon-3': 1, 'valve-1': 1, 'valve-2': 1, 'dial-1': 2, 'dial-2': 1, 'dial-3': 3 }); state.flags.push('loren-memory'); }
       state.position = { x: 0, z: 7 }; state.checkpoint = { zone, position: { x: 0, z: 7 } }; battle = null; world.build(state); setMode('explore'); encounterCooldown = 2;
     },
     interact: (id: string) => { const obj = areaObjects(state).find(o => o.id === id); if (obj) { state.position = { x: obj.x + 0.4, z: obj.z + 0.6 }; interact(obj); } },

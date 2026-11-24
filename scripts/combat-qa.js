@@ -7,7 +7,7 @@ async page => {
     const {World}=await import(resource('world')); const {AudioDirector}=await import(resource('audio'));
     window.combatQA={visual:[],sound:[],motion:0,reducedMotion:0,fxFrames:0};
     const attack=World.prototype.attackEffect, render=World.prototype.render, combat=AudioDirector.prototype.combat;
-    World.prototype.attackEffect=function(source,target,effect){window.combatQA.visual.push({source,target,effect,reduced:this.reduced}); return attack.call(this,source,target,effect);};
+    World.prototype.attackEffect=function(source,target,effect,move){window.combatQA.visual.push({source,target,effect,move,reduced:this.reducedBattleMotion}); return attack.call(this,source,target,effect,move);};
     World.prototype.render=function(...args){const result=render.apply(this,args); for(const s of this.sprites.values()){const a=s.userData.attack;if(a){const distance=s.position.distanceTo(a.origin);window.combatQA[this.reduced?'reducedMotion':'motion']=Math.max(window.combatQA[this.reduced?'reducedMotion':'motion'],distance);}} if(this.combatFx.length)window.combatQA.fxFrames++;return result;};
     AudioDirector.prototype.combat=function(effect,phase='impact'){window.combatQA.sound.push({effect,phase,context:this.context?.state,volume:this.volume});return combat.call(this,effect,phase);};
   });

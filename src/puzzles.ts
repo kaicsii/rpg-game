@@ -112,10 +112,6 @@ export function checkPuzzleBoard(state: GameState, board: PuzzleBoard) {
   if (!boardSaved(state, board)) state.flags.push(`puzzle-${board.id}`);
 }
 
-export const northGateOpen = (state: GameState) =>
-  boardSaved(state, PUZZLE_BOARDS[0]) || state.flags.some(flag => ['visited-forest', 'loren-memory', 'ending'].includes(flag))
-  || state.defeated.length > 0 || Object.keys(state.mechanisms).some(id => id.startsWith('beacon-'));
-
 export const BEACONS = ['beacon-1', 'beacon-2', 'beacon-3'];
 export const VALVES = ['valve-1', 'valve-2'];
 export const DIALS = ['dial-1', 'dial-2', 'dial-3'];

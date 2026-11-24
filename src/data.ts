@@ -10,12 +10,15 @@ export type HeroId = 'lien' | 'loren';
 export interface Hero { id: HeroId; name: string; hp: number; mp: number; maxHp: number; maxMp: number; atk: number; def: number; speed: number; accessory: string | null }
 export interface Settings { volume: number; quality: 'high' | 'low'; reducedMotion: boolean; autoStopLowHp: boolean }
 export interface GameState {
-  version: 1; leaderId: HeroId; discoveredObjectIds: string[]; zone: ZoneId; position: Vec2; party: Hero[]; xp: number; gold: number;
+  version: 2; leaderId: HeroId; discoveredObjectIds: string[]; zone: ZoneId; position: Vec2; party: Hero[]; xp: number; gold: number;
   inventory: Record<ItemId, number>; flags: string[]; defeated: string[];
   mechanisms: Record<string, number>; checkpoint: { zone: ZoneId; position: Vec2 };
   playSeconds: number; settings: Settings;
 }
-export interface Interactable extends Vec2 { id: string; label: string; kind: 'npc' | 'lamp' | 'mechanism' | 'chest' | 'herb' | 'memory' | 'exit' | 'back' | 'lore' | 'clue' | 'story'; }
+export interface Interactable extends Vec2 {
+  id: string; label: string; takeOnRead?: boolean;
+  kind: 'npc' | 'lamp' | 'mechanism' | 'chest' | 'herb' | 'memory' | 'exit' | 'back' | 'lore' | 'clue' | 'story';
+}
 export interface Encounter extends Vec2 { id: string; enemies: string[]; required?: boolean; }
 export interface Zone { id: ZoneId; name: string; subtitle: string; chapter: string; description: string; color: string; objects: Interactable[]; encounters: Encounter[]; }
 export const ZONES: Record<ShortZoneId, Zone> = {
@@ -135,32 +138,6 @@ export const BRIDGE_CLUES: Record<HeroId, { action: string; summary: string; lin
     ['莉恩', '你竟然還記得這些。把你的發現告訴婆婆吧，她也許知道那串鈴等的是誰。'],
   ] },
 };
-export const GUARDIAN_INTRO = [
-  ['旁白', '三盞路燈映進河裡。古橋的鈴無風自響，原本垂向水面的根鬚，正一根根抬起。'],
-  ['洛恩', '它在護橋。你看樹皮底下的光——它聚起根鬚時，接縫就會露出來。'],
-  ['莉恩', '那就先試出哪種攻擊能鬆開護盾。等它蓄力，再把根鬚打散！'],
-];
-export const OPENING = [
-  ['序章', '月蝕之夜將至。霧鐘村的星燈，已經七日沒有亮起。'],
-  ['莉恩', '婆婆說，只要還有人記得彼此，燈火就不會真正熄滅。可是……這一次，為什麼連鐘聲都變輕了？'],
-  ['洛恩', '我不記得自己的來處。但看見那座鐘塔時，我的心裡……像有一盞燈。'],
-  ['莉恩', '那就一起去吧！先去問問廣場上的守燈婆婆，她一定知道些什麼。'],
-];
-export const LOREN_MEMORY = [
-  ['洛恩', '這塊石頭上……刻著我的名字。守鐘人，洛恩。'],
-  ['記憶中的聲音', '你總說要獨自守住長夜。可一個人的記憶，怎麼承載整座城的光呢？'],
-  ['洛恩', '我把所有人的悲傷都藏進了鐘裡，卻忘記了那些歡笑。無光的守鐘人……是我留下的影子。'],
-  ['莉恩', '那我們就把歡笑也帶回去。婆婆的茶、米菈的風鈴，還有你剛才，努力講的那個笑話。'],
-  ['洛恩', '……謝謝你，莉恩。這一次，我不會再一個人守燈了。'],
-];
-export const ENDING = [
-  ['無光的守鐘人', '若不再替他們收藏悲傷……誰來記得那些失去的人？'],
-  ['洛恩', '我們會記得。不是把自己鎖在長夜裡，而是帶著他們，走向明天。'],
-  ['莉恩', '看啊。那不是一個人的星火，是每一扇窗、每一個願意等待的人。'],
-  ['旁白', '山城的燈，一盞接著一盞亮起。久違的鐘聲越過森林，掠過水面，喚醒了山巒之後的第一道晨光。'],
-  ['洛恩', '天亮了。回家吧。'],
-];
-
 export const LORE: Record<string, { title: string; lines: string[][] }> = {
   'village-letter': { title: '一封沒有寄出的信', lines: [
     ['泛黃的信紙', '給離家的孩子：今年的月露花又開了。我把你的窗戶擦得很亮，這樣你從山路上回來，一眼就能看見。'],
@@ -213,10 +190,10 @@ export const LORE: Record<string, { title: string; lines: string[][] }> = {
     ['洛恩', '或許正因如此，他才為後來的人，留下了這句話。'],
   ] },
 };
-const lorePositions: Record<ShortZoneId, { id: string; x: number; z: number }[]> = {
-  village: [{ id: 'village-letter', x: -10, z: 4 }, { id: 'village-bell', x: 4, z: -6 }],
+const lorePositions: Record<ShortZoneId, Omit<Interactable, 'label' | 'kind'>[]> = {
+  village: [{ id: 'village-letter', x: -10, z: 4, takeOnRead: true }, { id: 'village-bell', x: 4, z: -6 }],
   forest: [{ id: 'forest-song', x: -10, z: -2 }, { id: 'forest-keeper', x: 10, z: 6 }],
-  waterway: [{ id: 'waterway-names', x: -9, z: 6 }, { id: 'waterway-boat', x: 9, z: -1 }],
-  tower: [{ id: 'tower-oath', x: -8, z: -5 }, { id: 'tower-dawn', x: 8, z: 5 }],
+  waterway: [{ id: 'waterway-names', x: -9, z: 6 }, { id: 'waterway-boat', x: 9, z: -1, takeOnRead: true }],
+  tower: [{ id: 'tower-oath', x: -8, z: -5, takeOnRead: true }, { id: 'tower-dawn', x: 8, z: 5 }],
 };
 for (const id of ZONE_ORDER) ZONES[id].objects.push(...lorePositions[id].map(o => ({ ...o, label: LORE[o.id].title, kind: 'lore' as const })));

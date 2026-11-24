@@ -4,6 +4,7 @@ async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const read = () => page.evaluate(() => window.__starlight.getState());
   const mode = () => page.evaluate(() => window.__starlight.getMode());
+  const tone = () => page.locator('#game').getAttribute('data-story-tone');
   const skip = async () => {
     if (await page.locator('.dialogue-panel').count()) await page.keyboard.press('Escape');
   };
@@ -36,6 +37,7 @@ async (page) => {
   const interact = async (id, finish = true) => {
     await approach(id);
     await page.keyboard.press('e');
+    await page.waitForFunction(() => document.querySelector('#game')?.getAttribute('aria-busy') !== 'true');
     if (finish) await skip();
   };
   const fight = async (id, lamp) => {
@@ -75,9 +77,11 @@ async (page) => {
       await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
       if (await page.locator('.dialogue-panel').count()) {
         phases++;
+        check(await tone() === 'rupture', 'Second phase starts with the rupture cue');
         await skip();
         await page.waitForSelector('.dialogue-panel', { state: 'hidden' });
         await page.waitForFunction(() => !document.querySelector('.battle-thinking'));
+        check(await tone() === null, 'Skipping the phase cue restores battle presentation');
       }
     }
     throw new Error(`Battle failed to finish: ${id}`);
@@ -88,10 +92,10 @@ async (page) => {
     await page.locator(`[data-action="travel:${zone}"]`).click();
     check((await read()).zone === zone, `Travel failed: ${zone}`);
   };
-  const reload = async () => {
+  const reload = async (slot = 'auto') => {
     await page.reload();
     await page.getByRole('button', { name: '繼續旅程', exact: true }).click();
-    await page.locator('.save-slot').first().getByRole('button', { name: '讀取記錄' }).click();
+    await page.locator(`[data-action="load:${slot}"]`).click();
   };
   const solveBoard = async (board, target) => {
     const panel = page.getByRole('dialog', { name: board.title });
@@ -129,6 +133,12 @@ async (page) => {
       await set(0, board.answer[0]);
     }
     await submit.click();
+    if (board.id === 'pitch') {
+      check(await tone() === 'signal', 'The successful relay begins with a signal cue');
+      for (let i = 0; i < 3; i++) await page.keyboard.press('e');
+      check(await tone() === 'rupture', 'The interruption changes the cue without advancing the quest');
+      check(!(await read()).flags.includes('C4-05'), 'Staging does not finish the relay dialogue');
+    }
     await skip();
     check((await read()).flags.includes(`puzzle-${board.id}`), `Puzzle solved: ${board.id}`);
     await page.setViewportSize({ width: 1280, height: 720 });
@@ -139,8 +149,15 @@ async (page) => {
   await page.getByRole('switch', { name: '減少動態效果' }).click();
   await page.getByRole('button', { name: '輕盈', exact: true }).click();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '開始中篇' }).click();
+  check(await page.locator('.title-actions [data-action^="new"]').count() === 1, 'Title exposes a single new game');
+  await page.getByRole('button', { name: '啟程 BEGIN YOUR JOURNEY' }).click();
+  check(await tone() === 'night', 'Opening starts on the night cue');
+  const stillFrame = await page.evaluate(() => window.__starlight.view().top);
+  for (let i = 0; i < 3; i++) await page.keyboard.press('e');
+  check(await tone() === 'warm', 'Opening moves from the village to the two travelers');
+  check(await page.evaluate(() => window.__starlight.view().top) === stillFrame, 'Reduced motion holds the camera framing');
   await skip();
+  check(await tone() === null, 'Skipping restores exploration presentation');
   check((await read()).flags.includes('P00'), 'Opening is saved');
   const chapters = await page.evaluate(async () => (await import('/src/medium-content.ts')).MEDIUM_CHAPTERS);
   const boards = await page.evaluate(async () => (await import('/src/puzzles.ts')).PUZZLE_BOARDS.map(({ failure, ...board }) => board));
@@ -185,6 +202,13 @@ async (page) => {
         await page.getByRole('button', { name: '問回音還記得什麼' }).click();
         check((await page.locator('.dialogue-body > p').textContent()).includes('昨天'), 'Choice changes dialogue');
         await skip();
+      } else if (step.scene === 'C8-06') {
+        await interact(step.target, false);
+        await page.keyboard.press('e');
+        await page.keyboard.press('e');
+        check(await tone() === 'dawn' && !(await read()).flags.includes('ending'), 'Dawn plays on the star platform before the ending flag');
+        await skip();
+        check(await tone() === null, 'The ending clears the cutscene');
       } else await interact(step.target);
       const flag = step.part ? `${step.scene}:${step.part}` : step.scene;
       check((await read()).flags.includes(flag), `Missing progression flag ${flag}`);
@@ -212,18 +236,24 @@ async (page) => {
   });
   await go('waterway');
   await interact('waterway-boat');
+  check(await page.evaluate(async () => {
+    const { areaObjects } = await import('/src/game.ts');
+    const state = window.__starlight.getState();
+    return state.flags.includes('waterway-boat') && !areaObjects(state).some(object => object.id === 'waterway-boat');
+  }), 'The picked-up paper boat is recorded and removed from the map');
   await interact('pendant');
   await go('forest');
   for (const id of ['herb-1', 'herb-2', 'herb-3']) await interact(id);
   await go('village');
   await interact('elder');
   await interact('child');
-  check((await read()).flags.includes('herb-reward') && (await read()).flags.includes('pendant-reward'), 'Short quests work in the medium campaign');
+  check((await read()).flags.includes('herb-reward') && (await read()).flags.includes('pendant-reward'), 'The village side quests award both accessories');
   for (const quest of quests) {
     for (const stop of quest.stops) { await go(stop.zone); await interact(stop.point.id); }
     check((await read()).flags.includes(quest.id), `Quest not completed: ${quest.id}`);
   }
   for (const [id, zone] of [...notes, ...talks]) {
+    if ((await read()).flags.includes(id)) continue;
     await go(zone); await interact(id);
     check((await read()).flags.includes(id), `Could not read ${id}`);
   }
@@ -231,6 +261,33 @@ async (page) => {
   check((await page.locator('.chapter-card .eyebrow').textContent()).includes('54 / 54'), 'Journal shows all scenes');
   await page.setViewportSize({ width: 390, height: 844 });
   check(await page.getByRole('dialog', { name: '旅途日誌' }).isVisible(), 'Journal works in a narrow layout');
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const completedState = await read();
+  await page.evaluate(state => {
+    localStorage.setItem('starlight:manual', JSON.stringify({
+      ...state, version: 1, flags: [...state.flags, 'medium-campaign'],
+    }));
+  }, completedState);
+  await reload('manual');
+  check((await read()).flags.includes('E06'), 'Old expanded campaign preserves the completed epilogue');
+  await page.evaluate(async () => {
+    const { newGame } = await import('/src/game.ts');
+    const preMerge = newGame();
+    preMerge.zone = preMerge.checkpoint.zone = 'tower';
+    preMerge.flags = ['intro', 'main-quest', 'loren-memory', 'weapon-upgrade', 'ending'];
+    preMerge.defeated = ['forest-elite', 'water-elite', 'eclipse'];
+    preMerge.party[0].accessory = 'moon-charm';
+    preMerge.gold = 142;
+    localStorage.setItem('starlight:manual', JSON.stringify({ ...preMerge, version: 1 }));
+  });
+  await reload('manual');
+  const resumed = await read();
+  check(resumed.zone === 'waterway' && resumed.gold === 142 && resumed.party[0].accessory === 'moon-charm',
+    'Old short ending moves to the waterway and preserves equipment and gold');
+  check(!resumed.flags.includes('ending') && resumed.flags.includes('legacy-eclipse-reward'), 'The unified finale remains ahead');
+  await interact('tower-exit');
+  await interact('tower-exit');
+  check((await read()).zone === 'station', 'The old short ending can continue into the station');
   check(errors.length === 0, errors.join('; '));
-  return { battles, puzzles: boards.length + 3, scenes: 54, epilogue: 6, completedQuests: quests.length + 2, readNotes: notes.length, talks: talks.length };
+  return { oldSaves: 2, battles, puzzles: boards.length + 3, scenes: 54, epilogue: 6, completedQuests: quests.length + 2, readNotes: notes.length, talks: talks.length };
 }

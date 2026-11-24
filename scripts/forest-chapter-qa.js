@@ -56,14 +56,21 @@ async page => {
       return notes.call(this, frequency, ...args);
     };
   }, audioModule);
+  for (const id of ['merchant', 'child', 'forest-exit']) { await interact(id); await skip(); }
   await interact('forest-exit');
   for (const [slot, value] of [2, 3, 1].entries()) await page.locator(`[data-action="puzzle:${slot}:${value}"]`).click();
   await page.getByRole('button', { name: '試敲鐘' }).click();
   await skip();
   await page.waitForFunction(() => window.forestNotes.includes('forest'));
   await page.evaluate(() => window.__starlight.encounter('forest-elite'));
-  check(await page.locator('.bridge-title').count() === 0 && (await page.locator('#toast').innerText()).includes('先完成'), 'Guardian intro respects the lantern gate');
-  for (const id of ['beacon-1', 'beacon-2', 'beacon-3']) await interact(id);
+  check(await page.locator('.bridge-title').count() === 0 && (await page.locator('#toast').innerText()).includes('露珠軟泥'), 'Guardian intro respects the lantern gate');
+  await page.evaluate(() => window.__starlight.encounter('f1'));
+  await skip(); await ready();
+  while ((await battle()).status === 'active') {
+    await act((await battle()).order[(await battle()).cursor] === 'lien' ? { kind: 'skill', id: 'ember' } : { kind: 'attack' });
+  }
+  await page.locator('[data-action="battle:end"]').click(); await skip();
+  for (const id of ['beacon-1', 'beacon-2', 'beacon-3', 'bridge-sign', 'forest-lamp']) { await interact(id); await skip(); }
   await page.evaluate(() => window.__starlight.encounter('forest-elite'));
   await page.locator('.bridge-title').waitFor();
   await page.waitForFunction(() => window.forestNotes.includes('guardian'));
@@ -93,6 +100,7 @@ async page => {
     await act(current.order[current.cursor] === 'lien' ? { kind: 'skill', id: 'ember' } : { kind: 'attack' });
   }
   await page.locator('[data-action="battle:end"]').click();
+  await page.keyboard.press('e'); await page.keyboard.press('e');
   check((await page.locator('.dialogue-panel').innerText()).includes('兩短一長'), 'Optional clue changes the victory scene');
   await skip();
   check(await page.evaluate(() => window.forestScores.at(-1) === 'forest'), 'Forest score resumes after victory');
